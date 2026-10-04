@@ -7,3 +7,10 @@ storage/pdfs/*
 storage/temp/*
 !storage/**/.gitkeep
 .env
+# scan-import worker
+staging/
+.fixture-data/
+fixtures/
+.pytest_cache/
+.dev-data/
+*.log
