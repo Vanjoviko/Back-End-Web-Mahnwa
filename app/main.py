@@ -1,171 +1,109 @@
+import logging
 import os
-import re
-from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
-from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session
+from contextlib import asynccontextmanager
 
-from app.database import engine, Base, get_db
-from app.models import Manga, Chapter, ChapterPage, MangaStatus, ChapterStatus
-from app.schemas import (
-    ScanRequest, ScanResponse,
-    ImportRequest, ImportResponse,
-    MangaStatusResponse, ChapterProgressSummary,
-    ChapterPagesResponse
-)
-from app.services.scraper import ScraperService
-from app.services.worker import process_chapter_download
+from fastapi import FastAPI
 
-# Membuat tabel-tabel SQLite/PostgreSQL otomatis saat startup
-Base.metadata.create_all(bind=engine)
+from app.config import Settings
 
-app = FastAPI(
-    title="Manga Aggregator & Image Reader API",
-    version="2.0.0",
-    description="Sistem Scraper & Reader Manga berbasis potongan gambar (by-image)."
-)
-
-# Mount folder storage agar file gambar lokal bisa langsung dibuka di browser via /static/...
-os.makedirs("storage/manga", exist_ok=True)
-app.mount("/static", StaticFiles(directory="storage"), name="static")
+log = logging.getLogger("scan.main")
 
 
-def slugify(text: str) -> str:
-    text = re.sub(r'[^\w\s-]', '', text).strip().lower()
-    return re.sub(r'[-\s]+', '-', text)
+class ScanState:
+    """Komponen worker yang dibuat saat startup (lifespan)."""
+
+    def __init__(self, settings: Settings):
+        from app.scan.adapters import build_registry
+        from app.scan.engine import JobManager
+        from app.scan.http import GuardedHttp
+        from app.scan.service import make_policy
+        from app.scan.staging import Staging
+
+        self.settings = settings
+        self.staging = Staging(settings.staging_dir)
+        self.registry = build_registry(settings)
+        self.http = GuardedHttp(settings, make_policy(settings))
+        self.manager = JobManager(settings, self.registry, self.http, self.staging)
 
 
-# =====================================================================
-# 1. SCAN MANGA (ADMIN DISCOVERY)
-# =====================================================================
-@app.post("/api/manga/scan", response_model=ScanResponse, tags=["Admin - Import"])
-def scan_manga(req: ScanRequest):
-    """
-    Scan link utama komik (misal Kiryuu).
-    Mengambil judul, gambar cover, dan daftar seluruh chapter.
-    """
-    try:
-        metadata, chapters = ScraperService.scan_manga(req.source_url)
-        return {
-            "title": metadata["title"],
-            "cover_image_url": metadata["cover_image_url"],
-            "total_chapters": len(chapters),
-            "chapters": chapters
-        }
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Gagal melakukan scan: {str(exc)}")
+def create_app(settings: Settings | None = None) -> FastAPI:
+    import asyncio
 
+    from app.scan import api as scan_api
 
-# =====================================================================
-# 2. IMPORT MANGA (START BACKGROUND DOWNLOAD IMAGES)
-# =====================================================================
-@app.post("/api/manga/import", response_model=ImportResponse, tags=["Admin - Import"])
-def import_manga(req: ImportRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """
-    Daftarkan manga ke database dan jalankan background worker
-    untuk mengunduh seluruh potongan gambar per bab secara berurutan.
-    """
-    slug = slugify(req.title)
-    existing = db.query(Manga).filter(Manga.slug == slug).first()
-    if existing:
-        raise HTTPException(status_code=409, detail="Manga ini sudah terdaftar di sistem.")
+    settings = settings or Settings.from_env()
+    settings.validate()
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    # NFR-11 / QA D-05: httpx mencetak URL lengkap (beserta query/token) pada INFO -> turunkan + redaksi global.
+    from app.scan.logsafe import install_log_redaction, quiet_http_loggers
 
-    # 1. Simpan Manga ke database
-    manga = Manga(
-        title=req.title,
-        slug=slug,
-        source_url=req.source_url,
-        cover_image_url=req.cover_image_url,
-        status=MangaStatus.IMPORTING
+    quiet_http_loggers()
+    install_log_redaction()
+    if not settings.public_base_url:
+        log.warning("PUBLIC_BASE_URL tidak diset: URL pada manifest chapter akan berupa path relatif.")
+    if settings.dev_mode:
+        log.warning("SCAN_DEV_MODE aktif: http:// dan host loopback yang ada di allowlist diizinkan. JANGAN dipakai di produksi.")
+    if not settings.allowed_hosts and not settings.enable_fixture:
+        log.warning("SCAN_ALLOWED_HOSTS kosong: tidak ada adapter sumber yang aktif (fitur scan-import nonaktif).")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        state = ScanState(settings)
+        app.state.scan = state
+        # Job in-memory hilang saat restart; bersihkan staging yatim sisa proses sebelumnya.
+        state.staging.sweep(0, keep_jobs=set())
+
+        async def sweeper():
+            while True:
+                await asyncio.sleep(settings.sweep_interval_s)
+                try:
+                    state.manager.sweep()
+                except Exception:  # noqa: BLE001
+                    log.exception("sweeper_gagal")
+
+        task = asyncio.create_task(sweeper())
+        try:
+            yield
+        finally:
+            task.cancel()
+            await state.manager.shutdown()
+            await state.http.aclose()
+
+    # QA D-04: dokumentasi interaktif (/docs, /redoc, /openapi.json) dinonaktifkan; worker hanya melayani API bertoken
+    # (+ /health). Peta endpoint/skema tidak boleh terbuka tanpa token.
+    app = FastAPI(
+        title="Scan-Import Worker",
+        version=scan_api.VERSION,
+        description="Worker stateless untuk scan metadata komik dan unduh gambar chapter terurut.",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
-    db.add(manga)
-    db.flush()
+    scan_api.install_error_handlers(app)
+    app.include_router(scan_api.health_router)
+    app.include_router(scan_api.router)
 
-    # 2. Bulk Insert Chapters
-    chapter_records = []
-    for ch in req.chapters:
-        record = Chapter(
-            manga_id=manga.id,
-            chapter_number=ch.chapter_number,
-            title=ch.title,
-            source_url=ch.source_url,
-            status=ChapterStatus.QUEUED
-        )
-        chapter_records.append(record)
+    if settings.legacy_enabled:
+        # Kode legacy (SQLite + ScraperService lama) dipertahankan di balik flag, bukan dihapus.
+        from fastapi.staticfiles import StaticFiles
 
-    db.bulk_save_objects(chapter_records)
-    db.commit()
+        from app import legacy_api
+        from app.database import Base, engine
 
-    # 3. Masukkan ke antrean download di background
-    created_chapters = db.query(Chapter).filter(Chapter.manga_id == manga.id).all()
-    for ch in created_chapters:
-        background_tasks.add_task(process_chapter_download, ch.id)
+        log.warning("ENABLE_LEGACY_API aktif: endpoint /api/manga/*, /api/chapters/* dan /static tanpa autentikasi.")
+        Base.metadata.create_all(bind=engine)
+        os.makedirs("storage/manga", exist_ok=True)
+        app.mount("/static", StaticFiles(directory="storage"), name="static")
+        app.include_router(legacy_api.build_router(settings))
 
-    return {
-        "message": "Import berhasil dimulai. Gambar sedang diunduh di latar belakang.",
-        "manga_id": manga.id,
-        "total_enqueued": len(created_chapters)
-    }
+    return app
 
 
-# =====================================================================
-# 3. MONITORING PROGRESS DOWNLOAD (ADMIN DASHBOARD)
-# =====================================================================
-@app.get("/api/manga/{manga_id}/status", response_model=MangaStatusResponse, tags=["Admin - Monitoring"])
-def get_manga_progress(manga_id: int, db: Session = Depends(get_db)):
-    """
-    Pantau progres unduhan secara realtime
-    (jumlah bab selesai, sedang diproses, dan yang gagal).
-    """
-    manga = db.query(Manga).filter(Manga.id == manga_id).first()
-    if not manga:
-        raise HTTPException(status_code=404, detail="Manga tidak ditemukan.")
-
-    chapters = db.query(Chapter).filter(Chapter.manga_id == manga.id).all()
-
-    summary = ChapterProgressSummary(
-        total=len(chapters),
-        completed=sum(1 for c in chapters if c.status == ChapterStatus.COMPLETED),
-        downloading=sum(1 for c in chapters if c.status == ChapterStatus.DOWNLOADING),
-        queued=sum(1 for c in chapters if c.status == ChapterStatus.QUEUED),
-        failed=sum(1 for c in chapters if c.status == ChapterStatus.FAILED)
-    )
-
-    return {
-        "id": manga.id,
-        "title": manga.title,
-        "status": manga.status.value,
-        "progress": summary
-    }
-
-
-# =====================================================================
-# 4. GET CHAPTER PAGES / BY IMAGE (FRONTEND READER)
-# =====================================================================
-@app.get("/api/chapters/{chapter_id}/pages", response_model=ChapterPagesResponse, tags=["Public - Reader"])
-def get_chapter_pages(chapter_id: int, db: Session = Depends(get_db)):
-    """
-    Endpoint untuk aplikasi web reader.
-    Mengembalikan daftar URL potongan gambar terurut (halaman 1, 2, 3...).
-    """
-    chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
-    if not chapter:
-        raise HTTPException(status_code=404, detail="Chapter tidak ditemukan.")
-
-    pages = db.query(ChapterPage).filter(
-        ChapterPage.chapter_id == chapter_id
-    ).order_by(ChapterPage.page_number.asc()).all()
-
-    return {
-        "chapter_id": chapter.id,
-        "chapter_number": chapter.chapter_number,
-        "title": chapter.title,
-        "status": chapter.status.value,
-        "total_pages": len(pages),
-        "pages": [
-            {
-                "page": p.page_number,
-                "url": f"http://localhost:8000{p.image_url}"
-            }
-            for p in pages
-        ]
-    }
+def __getattr__(name: str):
+    # Kompatibel dengan `uvicorn app.main:app` tanpa membuat aplikasi saat modul di-import.
+    if name == "app":
+        instance = create_app()
+        globals()["app"] = instance
+        return instance
+    raise AttributeError(name)
