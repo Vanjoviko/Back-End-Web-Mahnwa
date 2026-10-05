@@ -4,8 +4,9 @@ from __future__ import annotations
 import hmac
 from typing import Optional
 
-from fastapi import APIRouter, Depends, FastAPI, Header, Path, Request
+from fastapi import APIRouter, Depends, FastAPI, Path, Request, Security
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
 from . import service
@@ -43,7 +44,17 @@ def state(request: Request):
     return request.app.state.scan
 
 
-def require_token(request: Request, x_worker_token: Optional[str] = Header(default=None)) -> None:
+# Skema OpenAPI agar Swagger menampilkan Authorize untuk header yang sama dengan FE.
+# auto_error=False: header kosong tetap jatuh ke pemeriksaan di bawah (401), bukan 403 bawaan FastAPI.
+worker_token_header = APIKeyHeader(
+    name="X-Worker-Token",
+    scheme_name="X-Worker-Token",
+    auto_error=False,
+    description="Sama dengan WORKER_TOKEN. Wajib untuk /worker/v1/*; tidak dipakai oleh GET /health.",
+)
+
+
+def require_token(request: Request, x_worker_token: Optional[str] = Security(worker_token_header)) -> None:
     expected = state(request).settings.worker_token
     if not expected:  # hanya mungkin di mode dev (divalidasi saat start)
         return

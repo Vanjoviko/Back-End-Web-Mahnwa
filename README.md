@@ -23,6 +23,8 @@ python -m app                                                       # http://127
 Atau `uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000`.
 Worker menolak start bila `WORKER_TOKEN` kosong (kecuali `SCAN_DEV_MODE=true`, hanya untuk pengembangan lokal).
 
+Swagger UI menyala secara default di [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) (juga `/redoc` dan `/openapi.json`). Untuk mencoba `/worker/v1/*` dari Swagger, klik **Authorize**, isi **X-Worker-Token** dengan nilai `WORKER_TOKEN` yang sama dengan `SCAN_WORKER_TOKEN` di FE, lalu tutup dialog. `GET /health` tidak membutuhkan token. Set `SCAN_ENABLE_DOCS=false` untuk mematikan dokumentasi (respons 404).
+
 ### Demo lokal dengan sumber fixture (konten orisinal buatan generator)
 
 ```bash
@@ -46,6 +48,7 @@ Dua repo terpisah: **Back-End-Web-Mahnwa** (worker FastAPI, repo ini) dan **Fron
 | `PUBLIC_BASE_URL` | kosong | Basis absolut untuk `url` di manifest chapter. |
 | `SCAN_ALLOWED_HOSTS` | kosong | Host sumber yang diizinkan (`host` atau `host:port`, koma). Kosong = fitur nonaktif. |
 | `SCAN_DEV_MODE` | `false` | Hanya lokal: izinkan `http://` dan host loopback/privat yang ada di allowlist. |
+| `SCAN_ENABLE_DOCS` | `true` | Swagger `/docs`, ReDoc `/redoc`, dan `/openapi.json`. `false` menutup ketiganya (404). |
 | `SCAN_ENABLE_FIXTURE` / `SCAN_FIXTURE_DIR` | `false` / `./fixtures` | Adapter `fixture://` lokal (hanya dengan `SCAN_DEV_MODE=true`). |
 | `SCAN_USER_AGENT` / `SCAN_CONTACT` | `LembarScan/1.0` / kosong | Identitas permintaan keluar. |
 | `STAGING_DIR` | `./staging` | Penyimpanan sementara job. |
@@ -125,6 +128,7 @@ Kontrak lengkap: lihat spesifikasi scan-import §4.3. Skema keluaran memakai `pa
 Lihat `.env.example` — semua variabel bertanda default. Ringkasan:
 
 * `WORKER_TOKEN`, `WORKER_BIND` (default `127.0.0.1`), `WORKER_PORT`, `PUBLIC_BASE_URL` (kosong = URL relatif), `STAGING_DIR`.
+* `SCAN_ENABLE_DOCS` (default `true`): dokumentasi interaktif. `false` mengembalikan 404 pada `/docs`, `/redoc`, dan `/openapi.json`.
 * `SCAN_ALLOWED_HOSTS` (default kosong ⇒ fitur nonaktif). `host` = port default, `host:port` = port tertentu.
 * Limit jalur scan-import: `SCAN_MAX_PAGES_PER_CHAPTER=300`, `SCAN_MAX_BYTES_PER_CHAPTER=157286400` (150 MiB), `SCAN_MAX_BYTES_PER_IMAGE=15728640` (15 MiB).
 * Kesopanan: `SCAN_CHAPTER_CONCURRENCY=2`, `SCAN_IMAGE_CONCURRENCY=4`, `SCAN_HOST_MAX_CONCURRENCY=4`, `SCAN_HOST_MIN_DELAY_MS=500`, `SCAN_MAX_ACTIVE_JOBS=2`.
@@ -137,7 +141,7 @@ SSRF guard tunggal (`app/scan/netguard.py`): HTTPS saja (http hanya `SCAN_DEV_MO
 (termasuk IPv4-mapped IPv6, notasi desimal/heksa, `localhost.`), IP hasil resolve dipakai untuk koneksi (pinning), setiap hop redirect divalidasi,
 dan setiap URL cover/gambar harus berada di allowlist. Token dibandingkan dengan `hmac.compare_digest`. Tanpa CORS. Staging berada di luar folder `storage/`.
 
-Dokumentasi interaktif (`/docs`, `/redoc`, `/openapi.json`) **dinonaktifkan** (404) agar peta endpoint tidak terbuka tanpa token; hanya `/health` yang tanpa token. Log tidak pernah memuat query string/token pada URL: logger `httpx`/`httpcore` dibatasi ke WARNING dan seluruh pesan log diredaksi (`?query` → `?[diredaksi]`, `user:pass@` dibuang; lihat `app/scan/logsafe.py`).
+Dokumentasi interaktif (`/docs`, `/redoc`, `/openapi.json`) menyala secara default agar API bisa dicoba dari Swagger; set `SCAN_ENABLE_DOCS=false` untuk menutupnya. Hanya `GET /health` yang tanpa token — rute `/worker/v1/*` tetap menolak permintaan tanpa `X-Worker-Token` yang valid. Log tidak pernah memuat query string/token pada URL: logger `httpx`/`httpcore` dibatasi ke WARNING dan seluruh pesan log diredaksi (`?query` → `?[diredaksi]`, `user:pass@` dibuang; lihat `app/scan/logsafe.py`).
 
 ## Kode legacy (dinonaktifkan, bukan dihapus)
 

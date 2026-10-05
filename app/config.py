@@ -55,6 +55,8 @@ class Settings:
     enable_fixture: bool = False
     fixture_dir: Path = field(default_factory=lambda: BASE_DIR / "fixtures")
     legacy_enabled: bool = False
+    # Swagger/ReDoc/OpenAPI. Default nyala agar `python -m app` menampilkan /docs.
+    enable_docs: bool = True
 
     # Limit khusus jalur scan-import (NFR-01). "150 MB" dibaca sebagai 150 MiB.
     max_pages_per_chapter: int = 300
@@ -116,6 +118,7 @@ class Settings:
             enable_fixture=_bool(env, "SCAN_ENABLE_FIXTURE"),
             fixture_dir=Path(env.get("SCAN_FIXTURE_DIR") or defaults.fixture_dir).resolve(),
             legacy_enabled=(legacy_raw or "").strip().lower() in TRUE_VALUES,
+            enable_docs=_bool(env, "SCAN_ENABLE_DOCS", default=True),
             max_pages_per_chapter=_int(env, "SCAN_MAX_PAGES_PER_CHAPTER", defaults.max_pages_per_chapter),
             max_bytes_per_chapter=_int(env, "SCAN_MAX_BYTES_PER_CHAPTER", defaults.max_bytes_per_chapter),
             max_bytes_per_image=_int(env, "SCAN_MAX_BYTES_PER_IMAGE", defaults.max_bytes_per_image),
