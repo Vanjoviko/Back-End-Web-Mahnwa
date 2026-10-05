@@ -69,16 +69,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await state.manager.shutdown()
             await state.http.aclose()
 
-    # QA D-04: dokumentasi interaktif (/docs, /redoc, /openapi.json) dinonaktifkan; worker hanya melayani API bertoken
-    # (+ /health). Peta endpoint/skema tidak boleh terbuka tanpa token.
+    # Dokumentasi interaktif menyala secara default agar API bisa dicoba dari Swagger.
+    # SCAN_ENABLE_DOCS=false menutup /docs, /redoc, dan /openapi.json (pengerasan produksi).
+    # Rute /worker/v1/* tetap memakai X-Worker-Token; GET /health tetap tanpa token.
+    docs_on = settings.enable_docs
+    if docs_on:
+        log.info("Dokumentasi interaktif aktif di /docs, /redoc, dan /openapi.json (SCAN_ENABLE_DOCS=false untuk menutup).")
+    else:
+        log.info("Dokumentasi interaktif nonaktif (SCAN_ENABLE_DOCS=false).")
     app = FastAPI(
         title="Scan-Import Worker",
         version=scan_api.VERSION,
-        description="Worker stateless untuk scan metadata komik dan unduh gambar chapter terurut.",
+        description=(
+            "Worker stateless untuk scan metadata komik dan unduh gambar chapter terurut. "
+            "Rute /worker/v1/* membutuhkan header X-Worker-Token (tombol Authorize di Swagger). "
+            "GET /health tidak membutuhkan token."
+        ),
         lifespan=lifespan,
-        docs_url=None,
-        redoc_url=None,
-        openapi_url=None,
+        docs_url="/docs" if docs_on else None,
+        redoc_url="/redoc" if docs_on else None,
+        openapi_url="/openapi.json" if docs_on else None,
     )
     scan_api.install_error_handlers(app)
     app.include_router(scan_api.health_router)

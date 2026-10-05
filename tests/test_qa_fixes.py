@@ -1,4 +1,9 @@
-"""Regresi temuan QA: D-04 (docs terbuka tanpa token) dan D-05 (log httpx mencetak URL + query/token)."""
+"""Regresi temuan QA: D-05 (log httpx mencetak URL + query/token).
+
+D-04 semula menutup /docs. Dokumentasi sekarang menyala secara default
+(`SCAN_ENABLE_DOCS`, default true) dan tetap bisa dimatikan; token worker
+pada `/worker/v1/*` tidak berubah.
+"""
 import logging
 
 import pytest
@@ -60,22 +65,53 @@ def test_d05_record_factory_redacts_formatted_args(caplog):
     assert "https://x.example/a?[diredaksi] status=200" in caplog.text
 
 
-# ---------------------------------------------------------------- D-04
-@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"])
-async def test_d04_docs_and_openapi_are_not_exposed(make_worker, path):
+# ---------------------------------------------------------------- dokumentasi (dulu D-04: docs ditutup)
+@pytest.mark.parametrize(
+    "path,needle",
+    [("/docs", "swagger"), ("/redoc", "redoc"), ("/openapi.json", "openapi"), ("/docs/oauth2-redirect", "swagger")],
+)
+async def test_docs_enabled_by_default_without_token(make_worker, path, needle):
     w = await make_worker()
-    for headers in ({}, w.h(), w.h("salah")):
-        r = await w.client.get(path, headers=headers)
-        assert r.status_code in {401, 404}, f"{path} -> {r.status_code}"
-        assert "openapi" not in r.text.lower() and "swagger" not in r.text.lower() and "/worker/v1/scan" not in r.text
+    r = await w.client.get(path)
+    assert r.status_code == 200, r.text
+    assert needle in r.text.lower()
+    assert w.app.docs_url == "/docs" and w.app.redoc_url == "/redoc" and w.app.openapi_url == "/openapi.json"
 
 
-async def test_d04_health_and_worker_api_still_work(make_worker):
+async def test_openapi_lists_worker_routes_and_token_scheme(make_worker):
+    w = await make_worker()
+    spec = (await w.client.get("/openapi.json")).json()
+    assert spec["paths"]["/health"]["get"].get("security") in (None, [])
+    scheme = spec["components"]["securitySchemes"]["X-Worker-Token"]
+    assert scheme["type"] == "apiKey" and scheme["in"] == "header" and scheme["name"] == "X-Worker-Token"
+    assert spec["paths"]["/worker/v1/scan"]["post"]["security"] == [{"X-Worker-Token": []}]
+    assert spec["paths"]["/worker/v1/status"]["get"]["security"] == [{"X-Worker-Token": []}]
+
+
+async def test_docs_do_not_bypass_worker_token(make_worker):
     w = await make_worker()
     assert (await w.client.get("/health")).status_code == 200
     assert (await w.client.get("/worker/v1/status", headers=w.h())).status_code == 200
     assert (await w.client.get("/worker/v1/status")).status_code == 401
+    bad = await w.client.get("/worker/v1/status", headers=w.h("salah"))
+    assert bad.status_code == 401 and bad.json()["code"] == "UNAUTHORIZED"
+    # Handler 404 kustom tetap berlaku untuk path yang bukan rute (tidak menelan /docs).
+    missing = await w.client.get("/tidak-ada")
+    assert missing.status_code == 404 and missing.json() == {"error": "Endpoint tidak ditemukan.", "code": "NOT_FOUND"}
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"])
+async def test_docs_hidden_when_scan_enable_docs_false(make_worker, path):
+    w = await make_worker(enable_docs=False)
+    for headers in ({}, w.h(), w.h("salah")):
+        r = await w.client.get(path, headers=headers)
+        assert r.status_code == 404, f"{path} -> {r.status_code} {r.text}"
+        assert r.json() == {"error": "Endpoint tidak ditemukan.", "code": "NOT_FOUND"}
+        lowered = r.text.lower()
+        assert "openapi" not in lowered and "swagger" not in lowered and "/worker/v1/scan" not in r.text
     assert w.app.docs_url is None and w.app.redoc_url is None and w.app.openapi_url is None
+    assert (await w.client.get("/health")).status_code == 200
+    assert (await w.client.get("/worker/v1/status")).status_code == 401
 
 
 # ---------------------------------------------------------------- D-09 (regresi akibat D-05: args dikosongkan -> uvicorn.access "Logging error")

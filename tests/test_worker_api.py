@@ -124,6 +124,12 @@ def test_settings_from_env_parses_everything():
     assert (d.max_pages_per_chapter, d.max_bytes_per_chapter, d.max_bytes_per_image) == (300, 157286400, 15728640)
     assert (d.chapter_concurrency, d.image_concurrency, d.host_max_concurrency, d.host_min_delay_ms, d.max_active_jobs) == (2, 4, 4, 500, 2)
     assert d.worker_bind == "127.0.0.1" and d.legacy_enabled is False and d.allowed_hosts == frozenset()
+    assert d.enable_docs is True  # absen = Swagger menyala
+    assert Settings.from_env({"WORKER_TOKEN": "t", "SCAN_ENABLE_DOCS": "  "}).enable_docs is True
+    for raw in ("false", "0", "no", "off", "FALSE"):
+        assert Settings.from_env({"WORKER_TOKEN": "t", "SCAN_ENABLE_DOCS": raw}).enable_docs is False
+    for raw in ("true", "1", "yes", "on", "TRUE"):
+        assert Settings.from_env({"WORKER_TOKEN": "t", "SCAN_ENABLE_DOCS": raw}).enable_docs is True
 
 
 def _run(code: str, env_extra: dict, cwd: Path):
