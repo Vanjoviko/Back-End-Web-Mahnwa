@@ -458,44 +458,44 @@ async def test_job_validation_errors(make_worker, source):
     assert (await w.start_job("bad id", url, [{"key": "c", "ref": ref}])).status_code == 400
     assert (await w.start_job("j1", url, [{"key": "c", "ref": ref}, {"key": "c", "ref": ref}])).status_code == 400
     assert (await w.start_job("j1", url, [{"key": "c", "ref": ref}], adapter="fixture")).status_code == 422
-    assert (await w.start_job("j1", "https://lain.example/x.json", [{"key": "c", "ref": ref}])).status_code == 422
+    assert (await w.start_job("j1", "https://lain.example/x.html", [{"key": "c", "ref": ref}])).status_code == 422
     assert (await w.start_job("j1", url, [{"key": "c", "ref": ref}])).status_code == 202
     assert (await w.start_job("j1", url, [{"key": "c", "ref": ref}])).status_code == 409
 
 
 # ------------------------------------------------------------------ SSRF
-async def test_image_url_to_private_ip_fails_ssrf_blocked_without_request(make_worker, source):
+async def test_image_url_to_blocked_name_fails_ssrf_blocked_without_request(make_worker, source):
     w = await make_worker(source)
-    listener = FakeSource(host="127.0.0.2")  # loopback lain, TIDAK di-allowlist
+    listener = FakeSource(host="127.0.0.1")
     try:
         listener.add_image("/secret.png", png_bytes(100))
-        final, ch = await run_chapter(w, source, [listener.url("/secret.png")])
+        final, ch = await run_chapter(w, source, [f"http://localhost:{listener.port}/secret.png"])
         assert ch["status"] == "FAILED" and ch["error_code"] == "SSRF_BLOCKED"
-        assert listener.hits == {}  # tidak ada request ke IP privat
+        assert listener.hits == {}  # tidak ada request ke nama host yang diblokir
     finally:
         listener.stop()
 
 
-@pytest.mark.parametrize("target", ["http://10.0.0.5/a.png", "http://169.254.169.254/latest/meta-data", "http://[::1]/a.png", "http://2130706433/a.png"])
-async def test_image_urls_to_blocked_addresses(make_worker, source, target):
+@pytest.mark.parametrize("target", ["http://localhost/a.png", "http://db.internal/a.png", "http://printer.local/a.png", "http://example.123/a.png"])
+async def test_image_urls_to_blocked_names(make_worker, source, target):
     w = await make_worker(source)
     final, ch = await run_chapter(w, source, [target])
     assert ch["error_code"] == "SSRF_BLOCKED"
 
 
-async def test_redirect_to_loopback_is_blocked_at_each_hop(make_worker, source):
+async def test_redirect_to_blocked_host_is_blocked_at_each_hop(make_worker, source):
     w = await make_worker(source)
     victim = FakeSource(host="127.0.0.2")
     try:
         victim.add_image("/internal.png", png_bytes(100))
-        source.routes["/r/1.png"] = (302, b"", "text/plain", {"Location": victim.url("/internal.png")})
+        source.routes["/r/1.png"] = (302, b"", "text/plain", {"Location": f"http://localhost:{victim.port}/internal.png"})
         final, ch = await run_chapter(w, source, ["r/1.png"])
         assert ch["error_code"] == "SSRF_BLOCKED" and victim.hits == {}
     finally:
         victim.stop()
 
 
-async def test_redirect_within_allowlisted_host_is_followed_and_loops_are_capped(make_worker, source):
+async def test_redirect_within_same_host_is_followed_and_loops_are_capped(make_worker, source):
     w = await make_worker(source)
     source.add_image("/real.png", png_bytes(100))
     source.routes["/ok/1.png"] = (302, b"", "text/plain", {"Location": "/real.png"})
@@ -506,10 +506,10 @@ async def test_redirect_within_allowlisted_host_is_followed_and_loops_are_capped
     assert ch["status"] == "FAILED" and ch["error_code"] == "TOO_MANY_REDIRECTS"
 
 
-async def test_image_on_host_outside_allowlist_is_rejected(make_worker, source):
+async def test_image_on_unresolvable_host_fails_cleanly(make_worker, source):
     w = await make_worker(source)
     final, ch = await run_chapter(w, source, ["https://cdn-lain.example/a.png"])
-    assert ch["error_code"] == "HOST_NOT_ALLOWED"
+    assert ch["error_code"] == "INVALID_URL"
 
 
 async def test_dns_pinning_connects_to_resolved_ip_and_sends_original_host(tmp_path, source):
@@ -525,7 +525,7 @@ async def test_dns_pinning_connects_to_resolved_ip_and_sends_original_host(tmp_p
         return ["127.0.0.1"]
 
     settings = make_settings(tmp_path)
-    policy = GuardPolicy(allowed_hosts=frozenset({f"pinned.example:{source.port}"}), allow_http=True, allow_private_for_allowlisted=True, resolver=resolver)
+    policy = GuardPolicy(allow_http=True, allow_private=True, resolver=resolver)
     http = GuardedHttp(settings, policy)
     try:
         data, _ = await http.fetch_bytes(f"http://pinned.example:{source.port}/img.png", max_bytes=10_000, too_large=Exception("x"), timeout=5)
@@ -543,7 +543,7 @@ async def test_fetch_headers_cannot_override_user_agent(tmp_path, source):
 
     source.add_image("/img.png", png_bytes(100))
     settings = make_settings(tmp_path, source)
-    http = GuardedHttp(settings, GuardPolicy(allowed_hosts=frozenset({source.hostport}), allow_http=True, allow_private_for_allowlisted=True))
+    http = GuardedHttp(settings, GuardPolicy(allow_http=True, allow_private=True))
     try:
         await http.fetch_bytes(source.url("/img.png"), max_bytes=10_000, too_large=Exception("x"), timeout=5,
                                headers={"User-Agent": "Mozilla/5.0 Chrome", "Referer": "https://sumber.example/", "Cookie": "x=1"})

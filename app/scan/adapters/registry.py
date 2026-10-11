@@ -1,50 +1,50 @@
 from __future__ import annotations
-
 from typing import Iterable
-from urllib.parse import urlsplit
 
 from ...config import Settings
 from ..errors import ScanError
-from ..netguard import host_allowed
 from .base import SourceAdapter
+from .shinigami import ShinigamiAdapter
+from .kiryuu import KiryuuAdapter
 
 
 class AdapterRegistry:
-    """Memetakan URL -> adapter. Adapter berbasis jaringan hanya aktif bila host ada di allowlist."""
+    """Memetakan URL -> adapter. Adapter jaringan aktif untuk host apa pun (tanpa allowlist)."""
 
     def __init__(self, adapters: Iterable[SourceAdapter], settings: Settings):
         self.adapters = list(adapters)
+
+        # --- INJEKSI ADAPTER MANUAL ---
+        # Memastikan Shinigami dan Kiryuu selalu dimuat meskipun tidak dikirim oleh service
+        existing_names = [a.name for a in self.adapters]
+        if "shinigami" not in existing_names:
+            self.adapters.append(ShinigamiAdapter())
+        if "kiryuu" not in existing_names:
+            self.adapters.append(KiryuuAdapter())
+
         self.settings = settings
 
     def active_names(self) -> list[str]:
         return [a.name for a in self.adapters if self._enabled(a)]
 
     def _enabled(self, adapter: SourceAdapter) -> bool:
-        if adapter.requires_allowlist:
-            return bool(self.settings.allowed_hosts)
-        return self.settings.enable_fixture
-
-    def _host_ok(self, adapter: SourceAdapter, url: str) -> bool:
-        if not adapter.requires_allowlist:
+        if adapter.is_fixture:
             return self.settings.enable_fixture
-        parts = urlsplit(url)
-        try:
-            port = parts.port or (443 if parts.scheme.lower() == "https" else 80)
-        except ValueError:
-            return False
-        return bool(parts.hostname) and host_allowed(parts.hostname, port, parts.scheme.lower(), self.settings.allowed_hosts)
+        return True
 
     def resolve(self, url: str) -> SourceAdapter:
-        candidates = [a for a in self.adapters if a.matches(url) and self._host_ok(a, url)]
+        candidates = [a for a in self.adapters if a.matches(url) and self._enabled(a)]
+
         if not candidates:
             active = self.active_names()
-            hint = ", ".join(active) if active else "tidak ada (SCAN_ALLOWED_HOSTS kosong)"
+            hint = ", ".join(active) if active else "tidak ada"
             raise ScanError(
                 "SOURCE_NOT_SUPPORTED",
                 f"Tidak ada adapter sumber untuk URL ini. Adapter aktif: {hint}.",
                 status=422,
                 extra={"adapters": active},
             )
+
         if len(candidates) > 1:
             raise ScanError(
                 "AMBIGUOUS_ADAPTER",
@@ -52,6 +52,7 @@ class AdapterRegistry:
                 status=409,
                 extra={"adapters": [a.name for a in candidates]},
             )
+
         return candidates[0]
 
     def by_name(self, name: str) -> SourceAdapter:

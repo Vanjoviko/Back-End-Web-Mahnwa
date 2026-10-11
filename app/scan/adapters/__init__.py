@@ -5,6 +5,8 @@ from .base import AdapterContext, ChapterEntry, PageRef, ScanResult, SourceAdapt
 from .fixture import FixtureAdapter
 from .manifest import ManifestAdapter
 from .registry import AdapterRegistry
+from .kiryuu import KiryuuAdapter
+from .shinigami import ShinigamiAdapter
 
 # Tambah adapter baru = satu modul + satu baris di sini.
 BUILTIN_ADAPTERS: list[type[SourceAdapter]] = [

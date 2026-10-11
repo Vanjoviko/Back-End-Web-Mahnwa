@@ -1,9 +1,12 @@
 """SSRF guard tunggal untuk worker (NFR-02).
 
-Aturan: skema https (http hanya mode dev), tanpa userinfo, port default atau
-allowlist, tolak IP/hostname privat/lokal/reserved (termasuk IPv4-mapped IPv6,
-notasi desimal/heksa), validasi setiap hop redirect, dan IP hasil resolve dipakai
-untuk koneksi (pinning) supaya tahan DNS rebinding.
+Aturan: skema https (http hanya mode dev), tanpa userinfo, tolak IP/hostname
+privat/lokal/reserved (termasuk IPv4-mapped IPv6, notasi desimal/heksa),
+validasi setiap hop redirect, dan IP hasil resolve dipakai untuk koneksi
+(pinning) supaya tahan DNS rebinding.
+
+Tidak ada daftar host yang diizinkan: seluruh sumber publik boleh diakses,
+selama tidak mengarah ke jaringan privat/lokal.
 """
 from __future__ import annotations
 
@@ -41,10 +44,9 @@ async def default_resolver(host: str, port: int) -> list[str]:
 
 @dataclass
 class GuardPolicy:
-    allowed_hosts: frozenset = frozenset()
     allow_http: bool = False
-    # Mode dev: host yang SUDAH ada di allowlist boleh berupa loopback/privat (server fixture lokal).
-    allow_private_for_allowlisted: bool = False
+    # Mode dev/lokal: izinkan host loopback/privat (server fixture lokal). JANGAN di produksi.
+    allow_private: bool = False
     resolver: Resolver = field(default=default_resolver)
 
 
@@ -123,25 +125,8 @@ def _blocked_name(host: str) -> bool:
     return host in BLOCKED_NAMES or host.endswith(BLOCKED_SUFFIXES)
 
 
-_ENTRY_RE = re.compile(r"^(?P<host>.+?)(?::(?P<port>\d+))?$")
-
-
-def host_allowed(host: str, port: int, scheme: str, allowed: frozenset) -> bool:
-    """Entri allowlist: "host" (hanya port default skema) atau "host:port"."""
-    default = 443 if scheme == "https" else 80
-    host = host.lower().rstrip(".")
-    for entry in allowed:
-        match = _ENTRY_RE.match(entry)
-        if not match or match.group("host").lower().rstrip(".") != host:
-            continue
-        entry_port = match.group("port")
-        if (int(entry_port) if entry_port else default) == port:
-            return True
-    return False
-
-
-def check_url(url: str, policy: GuardPolicy, *, require_allowlist: bool = True) -> Target:
-    """Validasi statis (tanpa DNS, tanpa koneksi). Melempar INVALID_URL / SSRF_BLOCKED / HOST_NOT_ALLOWED."""
+def check_url(url: str, policy: GuardPolicy) -> Target:
+    """Validasi statis (tanpa DNS, tanpa koneksi). Melempar INVALID_URL / SSRF_BLOCKED."""
     if not isinstance(url, str) or not url.strip():
         raise ScanError("INVALID_URL", "URL wajib diisi.")
     if len(url) > MAX_URL_LENGTH:
@@ -173,16 +158,9 @@ def check_url(url: str, policy: GuardPolicy, *, require_allowlist: bool = True) 
     if literal is None and _blocked_name(host):
         raise ScanError("SSRF_BLOCKED", "URL mengarah ke host lokal atau internal.", status=400)
 
-    allowlisted = host_allowed(host, port, scheme, policy.allowed_hosts)
-    dev_exempt = policy.allow_private_for_allowlisted and allowlisted
+    dev_exempt = policy.allow_private
     if literal is not None and ip_blocked(literal) and not dev_exempt:
         raise ScanError("SSRF_BLOCKED", "URL mengarah ke alamat jaringan privat atau terlarang.", status=400)
-    if require_allowlist and not allowlisted:
-        raise ScanError(
-            "HOST_NOT_ALLOWED",
-            "Host sumber tidak ada di daftar yang diizinkan (SCAN_ALLOWED_HOSTS).",
-            status=422,
-        )
     try:
         host_ascii = host.encode("idna").decode("ascii") if literal is None else host
     except UnicodeError as exc:
@@ -197,8 +175,7 @@ async def resolve_target(target: Target, policy: GuardPolicy) -> list[str]:
     addresses = await policy.resolver(target.host, target.port)
     if not addresses:
         raise ScanError("INVALID_URL", "Host sumber tidak dapat ditemukan.")
-    allowlisted = host_allowed(target.host, target.port, target.scheme, policy.allowed_hosts)
-    exempt = policy.allow_private_for_allowlisted and allowlisted
+    exempt = policy.allow_private
     for address in addresses:
         ip = ipaddress.ip_address(address)
         if ip_blocked(ip) and not exempt:

@@ -128,7 +128,6 @@ def make_settings(tmp_path: Path, source: FakeSource | None = None, **overrides)
         dev_mode=True,
         staging_dir=tmp_path / "staging",
         fixture_dir=tmp_path / "fixtures",
-        allowed_hosts=frozenset({source.hostport}) if source else frozenset(),
         host_min_delay_ms=0,
         retry_backoff_base_s=0.01,
         min_free_disk_bytes=0,

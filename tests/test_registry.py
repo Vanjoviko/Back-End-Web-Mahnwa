@@ -20,7 +20,7 @@ class Dummy(SourceAdapter):
         return []
 
 
-SETTINGS = Settings(allowed_hosts=frozenset({"sumber.example"}))
+SETTINGS = Settings()
 
 
 def test_zero_adapters_match():
@@ -28,7 +28,8 @@ def test_zero_adapters_match():
     with pytest.raises(ScanError) as e:
         reg.resolve("https://sumber.example/series")
     assert e.value.code == "SOURCE_NOT_SUPPORTED" and e.value.status == 422
-    assert e.value.extra["adapters"] == ["a"] and "a" in e.value.message
+    assert e.value.extra["adapters"] == ["a", "shinigami", "kiryuu"]
+    assert "a" in e.value.message
 
 
 def test_one_adapter_matches():
@@ -43,20 +44,17 @@ def test_two_adapters_match_is_ambiguous():
     assert e.value.code == "AMBIGUOUS_ADAPTER"
 
 
-def test_host_outside_allowlist_is_not_supported_even_if_pattern_matches():
+def test_host_is_matched_by_pattern_only():
     reg = AdapterRegistry([Dummy("a", "series")], SETTINGS)
-    with pytest.raises(ScanError) as e:
-        reg.resolve("https://lain.example/series")
-    assert e.value.code == "SOURCE_NOT_SUPPORTED"
+    assert reg.resolve("https://lain.example/series").name == "a"
 
 
-def test_default_allowlist_empty_means_no_adapter_active():
+def test_network_adapters_active_by_default():
     from app.scan.adapters import build_registry
 
     reg = build_registry(Settings())
-    assert reg.active_names() == []
-    with pytest.raises(ScanError):
-        reg.resolve("https://sumber.example/a.json")
+    assert reg.active_names() == ["manifest", "shinigami", "kiryuu"]
+    assert reg.resolve("https://sumber.example/a.json").name == "manifest"
 
 
 def test_builtin_adapters_are_generic_only():

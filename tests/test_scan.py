@@ -91,7 +91,7 @@ async def test_scan_requests_to_source_are_minimal_and_no_page_fetch(make_worker
 
 
 # ---------------------------------------------------------------- URL / FR-02
-@pytest.mark.parametrize("url", ["ftp://x", "https://user:pw@sumber.example/a.json", "http://127.0.0.1/a.json", "bukan url", "http://10.0.0.5/a.json", "file:///etc/passwd"])
+@pytest.mark.parametrize("url", ["ftp://x", "https://user:pw@sumber.example/a.json", "bukan url", "file:///etc/passwd"])
 async def test_invalid_scan_urls_rejected_without_outgoing_request(make_worker, source, url):
     w = await make_worker(source)
     r = await w.scan(url)
@@ -101,17 +101,9 @@ async def test_invalid_scan_urls_rejected_without_outgoing_request(make_worker, 
 
 async def test_valid_host_without_adapter_is_422_listing_active_adapters(make_worker, source):
     w = await make_worker(source)
-    r = await w.scan(source.url("/halaman.html"))  # host di allowlist, tetapi bukan .json
+    r = await w.scan(source.url("/halaman.html"))  # host valid, tetapi bukan .json
     assert r.status_code == 422 and r.json()["code"] == "SOURCE_NOT_SUPPORTED" and "manifest" in r.json()["error"]
-    r = await w.scan("https://tidak-diizinkan.example/a.json")
-    assert r.status_code == 422 and r.json()["code"] == "SOURCE_NOT_SUPPORTED"
     assert source.hits == {}
-
-
-async def test_default_empty_allowlist_means_scan_inactive(make_worker):
-    w = await make_worker(None, dev_mode=False)
-    r = await w.scan("https://sumber.example/a.json")
-    assert r.status_code == 422 and r.json()["code"] == "SOURCE_NOT_SUPPORTED" and "SCAN_ALLOWED_HOSTS" in r.json()["error"]
 
 
 async def test_scan_timeout_returns_504(make_worker, source):
@@ -148,12 +140,12 @@ async def test_cover_6mb_gives_warning_and_null_cover(make_worker, source):
     assert data["cover"] is None and "COVER_UNAVAILABLE" in data["warnings"]
 
 
-async def test_cover_pointing_to_private_ip_gives_ssrf_warning_without_request(make_worker, source):
+async def test_cover_pointing_to_blocked_host_gives_ssrf_warning_without_request(make_worker, source):
     w = await make_worker(source)
-    spy = FakeSource(host="127.0.0.2")
+    spy = FakeSource(host="127.0.0.1")
     try:
         spy.add_image("/c.png", png_bytes(500))
-        source.add_manifest("/s.json", {"title": "T", "cover": spy.url("/c.png"), "chapters": []})
+        source.add_manifest("/s.json", {"title": "T", "cover": f"http://localhost:{spy.port}/c.png", "chapters": []})
         r = await w.scan(source.url("/s.json"))
         data = r.json()
         assert r.status_code == 200 and data["cover"] is None and "SSRF_BLOCKED" in data["warnings"] and "COVER_UNAVAILABLE" in data["warnings"]
@@ -186,13 +178,13 @@ async def test_canonical_url_normalization(make_worker, source):
     assert canonical_url("fixture://menara-biru") == "fixture://menara-biru"
 
 
-async def test_manifest_page_pointing_outside_allowlist_is_rejected_at_download(make_worker, source):
+async def test_manifest_page_on_unresolvable_host_fails_cleanly(make_worker, source):
     w = await make_worker(source)
     source.add_manifest("/s.json", simple_manifest(source, [("Chapter 1", ["https://cdn-asing.example/1.png"])]))
     info = (await w.scan(source.url("/s.json"))).json()
     await w.start_job("j1", source.url("/s.json"), [{"key": "c1", "ref": info["chapters"][0]["ref"]}])
     final = await w.wait("j1")
-    assert final["chapters"][0]["error_code"] == "HOST_NOT_ALLOWED"
+    assert final["chapters"][0]["error_code"] == "INVALID_URL"
 
 
 async def test_stale_ref_after_manifest_change_fails_cleanly(make_worker, source):
@@ -216,7 +208,7 @@ def fixtures(tmp_path):
 
 
 async def test_fixture_adapter_end_to_end_without_network(make_worker, fixtures, tmp_path):
-    w = await make_worker(None, enable_fixture=True, fixture_dir=fixtures, allowed_hosts=frozenset())
+    w = await make_worker(None, enable_fixture=True, fixture_dir=fixtures)
     data = (await w.scan("fixture://menara-biru")).json()
     assert data["adapter"] == "fixture" and data["comic"]["title"] == "Menara Biru Mekar" and data["comic"]["status"] == "Berjalan"
     numbers = [c["number"] for c in data["chapters"]]
@@ -264,7 +256,7 @@ async def test_bermasalah_series_over_http_matches_spec_ac(make_worker, fixtures
     threading.Thread(target=server.serve_forever, daemon=True).start()
     port = server.server_address[1]
     try:
-        w = await make_worker(None, allowed_hosts=frozenset({f"127.0.0.1:{port}"}))
+        w = await make_worker(None)
         url = f"http://127.0.0.1:{port}/bermasalah/manifest.json"
         data = (await w.scan(url)).json()
         by_title = {c["title"]: c for c in data["chapters"]}

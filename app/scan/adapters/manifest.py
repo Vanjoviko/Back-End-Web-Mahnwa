@@ -1,7 +1,9 @@
-"""ManifestAdapter: sumber yang mempublikasikan manifest JSON terstruktur dan diizinkan Jovan.
+"""ManifestAdapter: sumber yang mempublikasikan manifest JSON terstruktur.
 
-Diakses lewat HTTP ter-guard dari host di SCAN_ALLOWED_HOSTS. Semua URL cover/halaman
-dalam manifest dicek terhadap guard SSRF + allowlist oleh klien HTTP saat diunduh.
+Tidak ada daftar host yang diizinkan: sumber publik apa pun boleh diakses,
+selama SSRF guard memastikan URL tidak mengarah ke jaringan privat/lokal.
+Semua URL cover/halaman dalam manifest dicek terhadap guard SSRF oleh klien
+HTTP saat diunduh.
 """
 from __future__ import annotations
 
@@ -16,7 +18,6 @@ from .manifest_schema import page_urls, parse_manifest, parse_ref
 class ManifestAdapter(SourceAdapter):
     name = "manifest"
     label = "Manifest JSON"
-    requires_allowlist = True
 
     def matches(self, url: str) -> bool:
         parts = urlsplit(url)

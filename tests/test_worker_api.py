@@ -115,15 +115,15 @@ def test_start_refused_without_token_outside_dev_mode():
 def test_settings_from_env_parses_everything():
     s = Settings.from_env({
         "WORKER_TOKEN": "t", "PUBLIC_BASE_URL": "https://w.internal:9000/", "WORKER_BIND": "127.0.0.1",
-        "SCAN_ALLOWED_HOSTS": " A.example , b.example:8080 ", "STAGING_DIR": "/tmp/st", "SCAN_MAX_PAGES_PER_CHAPTER": "123",
+        "STAGING_DIR": "/tmp/st", "SCAN_MAX_PAGES_PER_CHAPTER": "123",
         "SCAN_HOST_MIN_DELAY_MS": "10", "ENABLE_LEGACY_API": "true",
     })
-    assert s.public_base_url == "https://w.internal:9000" and s.allowed_hosts == {"a.example", "b.example:8080"}
+    assert s.public_base_url == "https://w.internal:9000"
     assert s.max_pages_per_chapter == 123 and s.host_min_delay_ms == 10 and s.legacy_enabled is True
     d = Settings.from_env({"WORKER_TOKEN": "t"})
     assert (d.max_pages_per_chapter, d.max_bytes_per_chapter, d.max_bytes_per_image) == (300, 157286400, 15728640)
     assert (d.chapter_concurrency, d.image_concurrency, d.host_max_concurrency, d.host_min_delay_ms, d.max_active_jobs) == (2, 4, 4, 500, 2)
-    assert d.worker_bind == "127.0.0.1" and d.legacy_enabled is False and d.allowed_hosts == frozenset()
+    assert d.worker_bind == "127.0.0.1" and d.legacy_enabled is False
     assert d.enable_docs is True  # absen = Swagger menyala
     assert Settings.from_env({"WORKER_TOKEN": "t", "SCAN_ENABLE_DOCS": "  "}).enable_docs is True
     for raw in ("false", "0", "no", "off", "FALSE"):

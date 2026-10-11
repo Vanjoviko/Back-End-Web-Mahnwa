@@ -51,7 +51,6 @@ class Settings:
     worker_port: int = 8000
     public_base_url: str = ""
     staging_dir: Path = field(default_factory=lambda: BASE_DIR / "staging")
-    allowed_hosts: frozenset = frozenset()
     enable_fixture: bool = False
     fixture_dir: Path = field(default_factory=lambda: BASE_DIR / "fixtures")
     legacy_enabled: bool = False
@@ -100,11 +99,6 @@ class Settings:
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Settings":
         env = os.environ if env is None else env
-        hosts = frozenset(
-            h.strip().lower().rstrip(".")
-            for h in (env.get("SCAN_ALLOWED_HOSTS") or "").split(",")
-            if h.strip()
-        )
         legacy_raw = env.get("ENABLE_LEGACY_API", env.get("LEGACY_API_ENABLED"))
         defaults = cls()
         return cls(
@@ -114,7 +108,6 @@ class Settings:
             worker_port=_int(env, "WORKER_PORT", defaults.worker_port),
             public_base_url=(env.get("PUBLIC_BASE_URL") or "").strip().rstrip("/"),
             staging_dir=Path(env.get("STAGING_DIR") or defaults.staging_dir).resolve(),
-            allowed_hosts=hosts,
             enable_fixture=_bool(env, "SCAN_ENABLE_FIXTURE"),
             fixture_dir=Path(env.get("SCAN_FIXTURE_DIR") or defaults.fixture_dir).resolve(),
             legacy_enabled=(legacy_raw or "").strip().lower() in TRUE_VALUES,

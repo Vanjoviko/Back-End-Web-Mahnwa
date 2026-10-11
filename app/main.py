@@ -42,9 +42,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if not settings.public_base_url:
         log.warning("PUBLIC_BASE_URL tidak diset: URL pada manifest chapter akan berupa path relatif.")
     if settings.dev_mode:
-        log.warning("SCAN_DEV_MODE aktif: http:// dan host loopback yang ada di allowlist diizinkan. JANGAN dipakai di produksi.")
-    if not settings.allowed_hosts and not settings.enable_fixture:
-        log.warning("SCAN_ALLOWED_HOSTS kosong: tidak ada adapter sumber yang aktif (fitur scan-import nonaktif).")
+        log.warning("SCAN_DEV_MODE aktif: http:// dan host loopback/privat diizinkan. JANGAN dipakai di produksi.")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

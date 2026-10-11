@@ -55,7 +55,7 @@ class AdapterContext:
 class SourceAdapter(ABC):
     name: str = ""
     label: str = ""  # nama tampilan untuk UI (FR-18)
-    requires_allowlist: bool = True
+    is_fixture: bool = False  # True hanya untuk adapter fixture lokal (butuh SCAN_ENABLE_FIXTURE)
 
     @abstractmethod
     def matches(self, url: str) -> bool: ...

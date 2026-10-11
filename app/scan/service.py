@@ -35,9 +35,8 @@ def canonical_url(url: str) -> str:
 def make_policy(settings: Settings, resolver=None) -> GuardPolicy:
     kwargs = {"resolver": resolver} if resolver else {}
     return GuardPolicy(
-        allowed_hosts=settings.allowed_hosts,
         allow_http=settings.dev_mode,
-        allow_private_for_allowlisted=settings.dev_mode,
+        allow_private=settings.dev_mode,
         **kwargs,
     )
 
@@ -48,7 +47,7 @@ def validate_scan_url(url: str, settings: Settings, policy: GuardPolicy) -> None
         if not settings.enable_fixture:
             raise ScanError("INVALID_URL", "URL harus memakai HTTPS.")
         return
-    check_url(url, policy, require_allowlist=False)
+    check_url(url, policy)
 
 
 async def stage_cover(cover_url: str | None, *, settings: Settings, http: GuardedHttp, staging: Staging, warnings: list[str]) -> dict | None:
@@ -72,7 +71,7 @@ async def stage_cover(cover_url: str | None, *, settings: Settings, http: Guarde
     except ScanError as exc:
         log.info("cover_gagal code=%s url=%s", exc.code, redact_url(cover_url))
         warnings.append("COVER_UNAVAILABLE")
-        if exc.code in {"SSRF_BLOCKED", "HOST_NOT_ALLOWED"}:
+        if exc.code == "SSRF_BLOCKED":
             warnings.append(exc.code)
         return None
 

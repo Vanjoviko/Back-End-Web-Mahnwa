@@ -6,7 +6,7 @@ adalah satu-satunya klien: FE mem-proxy `/api/admin/scan/*`, menarik hasil unduh
 `db.json` FE adalah sumber kebenaran; worker ini **stateless** (state job hanya in-memory + staging ber-TTL).
 
 > Sumber konten: hanya **adapter generik** (`manifest`, `fixture`) yang disertakan. Tidak ada scraper khusus situs mana pun.
-> Isi `SCAN_ALLOWED_HOSTS` hanya dengan sumber yang pemiliknya mengizinkan pengambilan kontennya.
+> Tidak ada daftar host yang diizinkan: sumber publik apa pun boleh di-scan. Hanya ambil konten yang pemiliknya mengizinkan.
 
 ## Menjalankan
 
@@ -15,12 +15,11 @@ Perlu Python 3.11+.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install fastapi "uvicorn[standard]" httpx pydantic sqlalchemy   # runtime (playwright/img2pdf hanya untuk kode legacy)
-cp .env.example .env                                                # lalu isi WORKER_TOKEN, SCAN_ALLOWED_HOSTS, ...
-set -a; . ./.env; set +a
+cp .env.example .env                                                # lalu isi WORKER_TOKEN, ...
 python -m app                                                       # http://127.0.0.1:8000
 ```
 
-Atau `uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000`.
+`python -m app` memuat `.env` di root repo secara otomatis (variabel yang sudah ada di shell menang, jadi `WORKER_TOKEN=... python -m app` tetap meng-override). Untuk entrypoint lain (mis. `uvicorn app.main:create_app --factory`), ekspor env lewat shell seperti biasa.
 Worker menolak start bila `WORKER_TOKEN` kosong (kecuali `SCAN_DEV_MODE=true`, hanya untuk pengembangan lokal).
 
 Swagger UI menyala secara default di [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) (juga `/redoc` dan `/openapi.json`). Untuk mencoba `/worker/v1/*` dari Swagger, klik **Authorize**, isi **X-Worker-Token** dengan nilai `WORKER_TOKEN` yang sama dengan `SCAN_WORKER_TOKEN` di FE, lalu tutup dialog. `GET /health` tidak membutuhkan token. Set `SCAN_ENABLE_DOCS=false` untuk mematikan dokumentasi (respons 404).
@@ -30,7 +29,7 @@ Swagger UI menyala secara default di [http://127.0.0.1:8000/docs](http://127.0.0
 ```bash
 pip install pillow
 python -m tools.fixture_source --root .fixture-data --port 9100 &      # sumber HTTP palsu: /menara-biru/manifest.json
-SCAN_DEV_MODE=true WORKER_TOKEN=dev-token SCAN_ALLOWED_HOSTS=127.0.0.1:9100 \
+SCAN_DEV_MODE=true WORKER_TOKEN=dev-token \
   SCAN_HOST_MIN_DELAY_MS=0 python -m app
 # Scan URL di FE: http://127.0.0.1:9100/menara-biru/manifest.json
 ```
@@ -46,8 +45,7 @@ Dua repo terpisah: **Back-End-Web-Mahnwa** (worker FastAPI, repo ini) dan **Fron
 | `WORKER_TOKEN` | — (wajib) | Token bersama dengan FE (`SCAN_WORKER_TOKEN`). Worker menolak start bila kosong kecuali `SCAN_DEV_MODE=true`. |
 | `WORKER_BIND` / `WORKER_PORT` | `127.0.0.1` / `8000` | Alamat dengar. Jangan `0.0.0.0` tanpa perlindungan jaringan (di Docker memang `0.0.0.0`, port tidak dipublish). |
 | `PUBLIC_BASE_URL` | kosong | Basis absolut untuk `url` di manifest chapter. |
-| `SCAN_ALLOWED_HOSTS` | kosong | Host sumber yang diizinkan (`host` atau `host:port`, koma). Kosong = fitur nonaktif. |
-| `SCAN_DEV_MODE` | `false` | Hanya lokal: izinkan `http://` dan host loopback/privat yang ada di allowlist. |
+| `SCAN_DEV_MODE` | `false` | Hanya lokal: izinkan `http://` dan host loopback/privat. Jangan dipakai di produksi. |
 | `SCAN_ENABLE_DOCS` | `true` | Swagger `/docs`, ReDoc `/redoc`, dan `/openapi.json`. `false` menutup ketiganya (404). |
 | `SCAN_ENABLE_FIXTURE` / `SCAN_FIXTURE_DIR` | `false` / `./fixtures` | Adapter `fixture://` lokal (hanya dengan `SCAN_DEV_MODE=true`). |
 | `SCAN_USER_AGENT` / `SCAN_CONTACT` | `LembarScan/1.0` / kosong | Identitas permintaan keluar. |
@@ -69,8 +67,7 @@ Dua repo terpisah: **Back-End-Web-Mahnwa** (worker FastAPI, repo ini) dan **Fron
 | `SCAN_WORKER_URL` (default `http://127.0.0.1:8000`) | `WORKER_BIND` + `WORKER_PORT` (default `127.0.0.1:8000`) | Alamat yang dipakai FE untuk memanggil worker harus menunjuk ke bind/port worker. Satu-satunya alamat worker yang dipakai FE; URL di dalam respons/manifest worker **tidak** diikuti. |
 | `SCAN_WORKER_TOKEN` | `WORKER_TOKEN` | **Harus identik.** Dikirim FE sebagai header `X-Worker-Token`. Worker wajib memilikinya (kecuali `SCAN_DEV_MODE=true`, hanya lokal); FE mengirim apa adanya, jadi nilai kosong/berbeda berujung 401 dari worker. |
 | — | `PUBLIC_BASE_URL` | Basis absolut untuk field `url` di manifest chapter (mis. `http://worker:8000`). Isi sama dengan `SCAN_WORKER_URL` seperti yang terlihat dari klien manifest; kosong = path relatif (`/worker/v1/...`). FE memakai `SCAN_WORKER_URL`, bukan `PUBLIC_BASE_URL`, jadi salah isi `PUBLIC_BASE_URL` tidak memutus FE tetapi membuat `url` di manifest keliru. |
-| `SCAN_DEV_MODE` | `SCAN_DEV_MODE` | Nyalakan di keduanya (hanya lokal) agar `http://` + host loopback/privat yang ada di `SCAN_ALLOWED_HOSTS` diizinkan. |
-| — | `SCAN_ALLOWED_HOSTS` | Sumber yang boleh di-scan (daftar host, koma). Kosong = Scan Import nonaktif. |
+| `SCAN_DEV_MODE` | `SCAN_DEV_MODE` | Nyalakan di keduanya (hanya lokal) agar `http://` + host loopback/privat diizinkan. |
 
 ### Memulai kedua layanan
 
@@ -87,7 +84,7 @@ Login `admin` / `admin-dev` (hanya dev), buka `http://127.0.0.1:3000/#admin` →
 ```bash
 # 1) Worker (repo BE)
 python -m venv .venv && . .venv/bin/activate && pip install fastapi "uvicorn[standard]" httpx pydantic sqlalchemy
-export WORKER_TOKEN="$(openssl rand -hex 24)" SCAN_ALLOWED_HOSTS="sumber.contoh.org" PUBLIC_BASE_URL="http://127.0.0.1:8000"
+export WORKER_TOKEN="$(openssl rand -hex 24)" PUBLIC_BASE_URL="http://127.0.0.1:8000"
 python -m app                                  # 127.0.0.1:8000, cek: curl http://127.0.0.1:8000/health
 
 # 2) FE (repo FE)
@@ -129,7 +126,6 @@ Lihat `.env.example` — semua variabel bertanda default. Ringkasan:
 
 * `WORKER_TOKEN`, `WORKER_BIND` (default `127.0.0.1`), `WORKER_PORT`, `PUBLIC_BASE_URL` (kosong = URL relatif), `STAGING_DIR`.
 * `SCAN_ENABLE_DOCS` (default `true`): dokumentasi interaktif. `false` mengembalikan 404 pada `/docs`, `/redoc`, dan `/openapi.json`.
-* `SCAN_ALLOWED_HOSTS` (default kosong ⇒ fitur nonaktif). `host` = port default, `host:port` = port tertentu.
 * Limit jalur scan-import: `SCAN_MAX_PAGES_PER_CHAPTER=300`, `SCAN_MAX_BYTES_PER_CHAPTER=157286400` (150 MiB), `SCAN_MAX_BYTES_PER_IMAGE=15728640` (15 MiB).
 * Kesopanan: `SCAN_CHAPTER_CONCURRENCY=2`, `SCAN_IMAGE_CONCURRENCY=4`, `SCAN_HOST_MAX_CONCURRENCY=4`, `SCAN_HOST_MIN_DELAY_MS=500`, `SCAN_MAX_ACTIVE_JOBS=2`.
   Worker berhenti pada HTTP 401/403/407/451, 429 yang berulang, atau halaman CAPTCHA/tantangan (kode `SOURCE_REFUSED`); tidak ada upaya melewati penolakan.
@@ -138,8 +134,8 @@ Lihat `.env.example` — semua variabel bertanda default. Ringkasan:
 ## Keamanan
 
 SSRF guard tunggal (`app/scan/netguard.py`): HTTPS saja (http hanya `SCAN_DEV_MODE`), tanpa userinfo, IP/host privat-lokal-reserved ditolak
-(termasuk IPv4-mapped IPv6, notasi desimal/heksa, `localhost.`), IP hasil resolve dipakai untuk koneksi (pinning), setiap hop redirect divalidasi,
-dan setiap URL cover/gambar harus berada di allowlist. Token dibandingkan dengan `hmac.compare_digest`. Tanpa CORS. Staging berada di luar folder `storage/`.
+(termasuk IPv4-mapped IPv6, notasi desimal/heksa, `localhost.`), IP hasil resolve dipakai untuk koneksi (pinning), dan setiap hop redirect divalidasi.
+Tidak ada allowlist host: sumber publik apa pun boleh diakses, selama tidak mengarah ke jaringan privat/lokal. Token dibandingkan dengan `hmac.compare_digest`. Tanpa CORS. Staging berada di luar folder `storage/`.
 
 Dokumentasi interaktif (`/docs`, `/redoc`, `/openapi.json`) menyala secara default agar API bisa dicoba dari Swagger; set `SCAN_ENABLE_DOCS=false` untuk menutupnya. Hanya `GET /health` yang tanpa token — rute `/worker/v1/*` tetap menolak permintaan tanpa `X-Worker-Token` yang valid. Log tidak pernah memuat query string/token pada URL: logger `httpx`/`httpcore` dibatasi ke WARNING dan seluruh pesan log diredaksi (`?query` → `?[diredaksi]`, `user:pass@` dibuang; lihat `app/scan/logsafe.py`).
 

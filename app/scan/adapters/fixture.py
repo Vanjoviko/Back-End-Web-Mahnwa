@@ -19,7 +19,7 @@ NAME_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 class FixtureAdapter(SourceAdapter):
     name = "fixture"
     label = "Fixture lokal"
-    requires_allowlist = False
+    is_fixture = True
 
     def matches(self, url: str) -> bool:
         return url.lower().startswith("fixture://")
