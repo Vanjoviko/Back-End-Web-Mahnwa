@@ -1,0 +1,19 @@
+# Normalisasi line-ending & tandai file biner (best practice).
+# Teks disimpan sebagai LF; skrip Windows tetap CRLF.
+* text=auto eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Biner (jangan di-diff sebagai teks)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.woff binary
+*.woff2 binary

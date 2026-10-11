@@ -1,16 +1,48 @@
-.venv/
+# --- Python ---
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# --- Cache & test tooling ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# --- Env & secrets (jangan pernah commit .env) ---
+.env
+.env.*
+!.env.example
+
+# --- Database & data runtime ---
 *.db
+*.sqlite3
+
+# --- Media hasil unduhan / storage lokal ---
 storage/manga/*
 storage/pdfs/*
 storage/temp/*
 !storage/**/.gitkeep
-.env
-# scan-import worker
+
+# --- scan-import worker ---
 staging/
 .fixture-data/
 fixtures/
-.pytest_cache/
 .dev-data/
 *.log
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
