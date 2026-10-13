@@ -345,6 +345,19 @@ class GuardedHttp:
                         self._raise_not_image(head, content_type, breaker, url)
             final = directory / f"{stem}{fmt.extension}"
             part.replace(final)
+            if self.settings.convert_webp and fmt is not imaging.WEBP:
+                converted = await asyncio.to_thread(imaging.encode_webp, final.read_bytes(), self.settings.webp_quality)
+                if converted is not None and len(converted) < size:
+                    webp_path = directory / f"{stem}.webp"
+                    webp_path.write_bytes(converted)
+                    final.unlink(missing_ok=True)
+                    if budget:
+                        budget.sub(size - len(converted))
+                        charged -= size - len(converted)
+                    final = webp_path
+                    fmt = imaging.WEBP
+                    size = len(converted)
+                    digest = hashlib.sha256(converted)
             return DownloadedImage(final, fmt, size, digest.hexdigest())
 
         try:

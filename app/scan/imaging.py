@@ -1,7 +1,16 @@
-"""Deteksi format gambar dari magic bytes (BE-05). Ekstensi tidak pernah diambil dari URL."""
+"""Deteksi format gambar dari magic bytes (BE-05) + konversi ke WebP.
+
+Ekstensi tidak pernah diambil dari URL. Konversi WebP (opsional, nonaktif secara
+default) dipakai jalur unduhan halaman supaya berkas tersimpan lebih kecil tanpa
+mengubah kontrak integritas: `bytes`/`sha256` manifest dihitung dari hasil konversi.
+"""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from io import BytesIO
+
+log = logging.getLogger("scan.imaging")
 
 PNG_SIGNATURE = bytes([137, 80, 78, 71, 13, 10, 26, 10])
 
@@ -44,6 +53,43 @@ def content_type_conflicts(header_value: str | None, detected: ImageFormat) -> b
     if media.startswith("text/") or media in {"application/json", "application/xml", "application/xhtml+xml", "application/javascript"}:
         return True
     return False  # octet-stream / tidak dikenal: percaya magic bytes
+
+
+WEBP_QUALITY_DEFAULT = 80
+WEBP_ENCODE_METHOD = 4  # 4 = kualitas/kecepatan seimbang; 6 = paling lambat & paling kecil
+
+
+def _rgb_mode(im) -> str:
+    """Mode target WebP: pertahankan transparansi bila ada, jika tidak RGB."""
+    if im.mode in {"RGBA", "LA", "PA"} or (im.mode == "P" and "transparency" in im.info):
+        return "RGBA"
+    return "RGB"
+
+
+def encode_webp(data: bytes, quality: int = WEBP_QUALITY_DEFAULT) -> bytes | None:
+    """Enkode `data` (JPEG/PNG/WebP apa pun) menjadi WebP lossy.
+
+    Mengembalikan bytes WebP, atau `None` bila data bukan gambar yang dapat
+    didekode (mis. berkas rusak/bukan gambar). Pemanggil bertanggung jawab
+    memutuskan apakah hasilnya layak dipakai (biasanya hanya bila lebih kecil).
+    """
+    try:
+        from PIL import Image  # impor lokal: Pillow opsional, fitur gagal-aman
+    except Exception:  # pragma: no cover - Pillow adalah dependensi wajib di requirements
+        log.warning("pillow_tidak_tersedia")
+        return None
+    try:
+        with Image.open(BytesIO(data)) as im:
+            im.load()
+            mode = _rgb_mode(im)
+            if im.mode != mode:
+                im = im.convert(mode)
+            out = BytesIO()
+            im.save(out, "WEBP", quality=int(quality), method=WEBP_ENCODE_METHOD)
+            return out.getvalue()
+    except Exception as exc:
+        log.info("encode_webp_gagal error=%s", type(exc).__name__)
+        return None
 
 
 CHALLENGE_MARKERS = (

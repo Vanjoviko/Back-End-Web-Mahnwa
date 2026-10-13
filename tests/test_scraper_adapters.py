@@ -1,7 +1,10 @@
-"""Uji adapter scraper (Kiryuu/Shinigami) untuk ekstraksi nomor chapter.
+"""Uji adapter scraper Kiryuu untuk ekstraksi nomor chapter.
 
 Regresi yang dicegah: link chapter menampilkan teks "Chapter 14 8 hours ago";
 parse berbasis teks merangkainya menjadi "148"/"138"/dst. Nomor diambil dari URL.
+
+Adapter Shinigami kini berbasis JSON API (bukan HTML) dan diuji di
+`test_shinigami_adapter.py`.
 """
 from __future__ import annotations
 
@@ -12,7 +15,7 @@ import pytest
 from app.config import Settings
 from app.scan.adapters.base import AdapterContext
 from app.scan.adapters.kiryuu import KiryuuAdapter, chapter_number_from_url as kiryuu_number
-from app.scan.adapters.shinigami import ShinigamiAdapter, chapter_number_from_url as shinigami_number
+from app.scan.adapters.manifest_schema import extract_date_text, normalize_released_at
 
 
 @pytest.mark.parametrize(
@@ -31,7 +34,6 @@ from app.scan.adapters.shinigami import ShinigamiAdapter, chapter_number_from_ur
 )
 def test_chapter_number_from_url(href, expected):
     assert kiryuu_number(href) == expected
-    assert shinigami_number(href) == expected
 
 
 class _FakeHttp:
@@ -68,6 +70,8 @@ async def test_kiryuu_scan_takes_number_from_url_without_titles():
     result = await KiryuuAdapter().scan("https://v7.kiryuu.to/manga/seri/", _ctx(KIRYUU_HTML))
     assert [c.number_raw for c in result.chapters] == ["14", "13", "12"]
     assert all(c.title == "" for c in result.chapters)
+    # "8 hours ago"/"2 days ago" -> waktu rilis relatif terisi
+    assert all(c.released_at is not None for c in result.chapters)
 
 
 KIRYUU_DETAIL_HTML = """
@@ -87,6 +91,16 @@ KIRYUU_DETAIL_HTML = """
 <a itemprop="genre" href="https://v7.kiryuu.to/genre/fantasy/">Fantasy</a>
 <a itemprop="genre" href="https://v7.kiryuu.to/genre/shounen/">Shounen</a>
 <a itemprop="genre" href="https://v7.kiryuu.to/genre/supernatural/">Supernatural</a>
+<div class="flex sm:justify-between justify-start items-center gap-2">
+  <h4 class="font-semibold text-base text-gray-100 flex items-center justify-start">
+    <span data-lucide="type-outline" class="mx-1 inline-block w-6 h-6"></span>
+    <span class="font-semibold">Type</span>
+  </h4>
+  <div class="inline">
+    <img src="https://v7.kiryuu.to/wp-content/themes/kiryuu/static/svg/manhua.svg" width="24" height="24" alt="">
+    <p class="font-normal text-sm inline ml-1">Manhua</p>
+  </div>
+</div>
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":["Book","ComicSeries"],
  "name":"Superhuman Era","creativeWorkStatus":"Ongoing","isCompleted":false,
@@ -116,22 +130,58 @@ async def test_kiryuu_scan_extracts_synopsis_genres_status():
     assert result.genres == ["Action", "Fantasy", "Shounen", "Supernatural"]
     # status dari JSON-LD creativeWorkStatus -> ternormalisasi
     assert result.status == "Berjalan"
+    # tipe dari baris info <h4>Type</h4> (bukan diasumsikan Manhwa)
+    assert result.type == "Manhua"
     assert [c.number_raw for c in result.chapters] == ["14", "13"]
 
 
-SHINIGAMI_HTML = """
-<html><body>
-<h1>Seri Uji</h1>
-<div class="wp-manga-chapter">
-  <a href="https://shinigami.example/chapter/14/">Chapter 14 <span>3 hours ago</span></a>
-  <a href="https://shinigami.example/chapter/13/">Chapter 13 <span>5 days ago</span></a>
-</div>
-</body></html>
-"""
+@pytest.mark.parametrize(
+    "label,expected",
+    [("Manhwa", "Manhwa"), ("Manhua", "Manhua"), ("Manga", "Manga"), ("Webtoon", None), ("", None)],
+)
+@pytest.mark.asyncio
+async def test_kiryuu_scan_type_from_info_row(label, expected):
+    html = f"""
+    <html><body>
+    <h1 class="entry-title">Seri Uji</h1>
+    <div class="flex items-center gap-2">
+      <h4 class="font-semibold"><span data-lucide="type-outline"></span><span>Type</span></h4>
+      <div class="inline"><p class="inline">{label}</p></div>
+    </div>
+    </body></html>
+    """
+    result = await KiryuuAdapter().scan("https://v7.kiryuu.to/manga/seri/", _ctx(html))
+    assert result.type == expected
 
 
 @pytest.mark.asyncio
-async def test_shinigami_scan_takes_number_from_url_without_titles():
-    result = await ShinigamiAdapter().scan("https://shinigami.example/manga/seri/", _ctx(SHINIGAMI_HTML))
-    assert [c.number_raw for c in result.chapters] == ["14", "13"]
-    assert all(c.title == "" for c in result.chapters)
+async def test_kiryuu_scan_type_absent_is_none():
+    result = await KiryuuAdapter().scan("https://v7.kiryuu.to/manga/seri/", _ctx(KIRYUU_HTML))
+    assert result.type is None
+
+
+
+def test_normalize_released_at_variants():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime(2026, 10, 11, 12, 0, 0, tzinfo=timezone.utc)
+    # absolut dengan/ tanpa zona (naive dianggap WIB, UTC+7)
+    assert normalize_released_at("2026-09-28T09:00:00+07:00") == "2026-09-28T09:00:00+07:00"
+    assert normalize_released_at("2026-09-28 09:00") == "2026-09-28T09:00:00+07:00"
+    assert normalize_released_at("28 Sep 2026 09:00") == "2026-09-28T09:00:00+07:00"
+    # tanpa jam / tidak dikenali -> None (pemanggil memakai waktu publikasi)
+    assert normalize_released_at("2026-09-28") is None
+    assert normalize_released_at("bukan tanggal") is None
+    assert normalize_released_at(None) is None
+    # relatif (Inggris & Indonesia)
+    assert normalize_released_at("8 hours ago", now=now) == (now - timedelta(hours=8)).isoformat()
+    assert normalize_released_at("3 jam lalu", now=now) == (now - timedelta(hours=3)).isoformat()
+    assert normalize_released_at("kemarin", now=now) == (now - timedelta(days=1)).isoformat()
+    assert normalize_released_at("5 menit yang lalu", now=now) == (now - timedelta(minutes=5)).isoformat()
+
+
+def test_extract_date_text():
+    assert extract_date_text("Chapter 14 8 hours ago") == "8 hours ago"
+    assert extract_date_text("Chapter 14\n8 hours ago") == "8 hours ago"
+    assert extract_date_text("Bab 3 - 28 Sep 2026") == "28 Sep 2026"
+    assert extract_date_text("Chapter 14") is None

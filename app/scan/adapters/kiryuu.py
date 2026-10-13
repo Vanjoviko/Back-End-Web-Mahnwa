@@ -4,7 +4,7 @@ import re
 from bs4 import BeautifulSoup
 
 from app.scan.adapters.base import SourceAdapter, AdapterContext, ScanResult, ChapterEntry, PageRef
-from app.scan.adapters.manifest_schema import STATUS_MAP
+from app.scan.adapters.manifest_schema import STATUS_MAP, TYPE_MAP, extract_date_text, normalize_date, normalize_released_at
 from app.scan.errors import ScanError
 
 def parse_chapter_number(text: str) -> str:
@@ -130,6 +130,18 @@ def _extract_status(soup: BeautifulSoup, ld: dict | None) -> str | None:
     return None
 
 
+def _extract_type(soup: BeautifulSoup) -> str | None:
+    """Tipe komik dari baris info: <h4>Type</h4> + <div class="inline">…Manhua…</div>.
+
+    Kiryuu menampilkan salah satu dari Manhwa/Manhua/Manga; nilai tak dikenal -> None
+    supaya pemanggil memakai default-nya, bukan menebak salah.
+    """
+    raw = _label_value(soup, {"Type", "type"})
+    if isinstance(raw, str):
+        return TYPE_MAP.get(raw.strip().lower())
+    return None
+
+
 class KiryuuAdapter(SourceAdapter):
     name = "kiryuu"
     label = "Kiryuu"
@@ -188,6 +200,7 @@ class KiryuuAdapter(SourceAdapter):
             if not text:
                 span = el.find("span", class_="chapternum")
                 text = span.get_text(" ", strip=True) if span else ""
+            date_text = extract_date_text(text)
             
             if href not in seen_refs:
                 seen_refs.add(href)
@@ -195,7 +208,9 @@ class KiryuuAdapter(SourceAdapter):
                     ChapterEntry(
                         ref=href, 
                         number_raw=chapter_number_from_url(href) or parse_chapter_number(text or href), 
-                        title=""  # judul hanya mengikuti judul komik
+                        title="",  # judul hanya mengikuti judul komik
+                        date=normalize_date(date_text),
+                        released_at=normalize_released_at(date_text),
                     )
                 )
                 
@@ -207,6 +222,7 @@ class KiryuuAdapter(SourceAdapter):
             synopsis=_pick_synopsis(soup),
             genres=_extract_genres(soup, ld),
             status=_extract_status(soup, ld),
+            type=_extract_type(soup),
         )
 
     async def list_pages(self, chapter_ref: str, ctx: AdapterContext) -> list[PageRef]:

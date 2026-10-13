@@ -57,12 +57,39 @@ class Settings:
     # Swagger/ReDoc/OpenAPI. Default nyala agar `python -m app` menampilkan /docs.
     enable_docs: bool = True
 
+    # --- Database (auth/bookmark) ---
+    # Informational mirror dari DATABASE_URL; engine sebenarnya dibuat di app/database.py.
+    database_url: str = ""
+
+    # --- Login sosial (OAuth) ---
+    # Rahasia (client secret) HANYA dibaca dari environment, tidak pernah dikirim ke browser.
+    auth_enabled: bool = False
+    auth_frontend_base_url: str = ""
+    auth_public_base_url: str = ""
+    auth_secret: str = ""
+    auth_session_ttl_days: int = 30
+    auth_cookie_secure: bool = False
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    discord_client_id: str = ""
+    discord_client_secret: str = ""
+    x_client_id: str = ""
+    x_client_secret: str = ""
+    # Daftar email master admin (RBAC). Email yang login & terverifikasi akan berperan 'admin'.
+    admin_emails: tuple[str, ...] = ()
+
     # Limit khusus jalur scan-import (NFR-01). "150 MB" dibaca sebagai 150 MiB.
     max_pages_per_chapter: int = 300
     max_bytes_per_chapter: int = 157_286_400
     max_bytes_per_image: int = 15_728_640
     max_cover_bytes: int = 5_000_000
     max_manifest_bytes: int = 5_000_000
+
+    # Konversi halaman ke WebP saat unduh. Nonaktif default: kontrak format
+    # (BE-05, ekstensi dari magic bytes) tetap utuh bila tidak diminta. Bila aktif,
+    # `bytes`/`sha256` manifest dihitung dari hasil konversi sehingga FE tetap lolos.
+    convert_webp: bool = False
+    webp_quality: int = 80
 
     # Konkurensi & kesopanan (NFR-04)
     chapter_concurrency: int = 2
@@ -89,7 +116,7 @@ class Settings:
     cancelled_cleanup_s: float = 60.0
     sweep_interval_s: float = 600.0
 
-    user_agent: str = "LembarScan/1.0"
+    user_agent: str = "AkumaScan/1.0"
     contact: str = ""
 
     @property
@@ -112,11 +139,29 @@ class Settings:
             fixture_dir=Path(env.get("SCAN_FIXTURE_DIR") or defaults.fixture_dir).resolve(),
             legacy_enabled=(legacy_raw or "").strip().lower() in TRUE_VALUES,
             enable_docs=_bool(env, "SCAN_ENABLE_DOCS", default=True),
+            database_url=(env.get("DATABASE_URL") or "").strip(),
+            auth_enabled=_bool(env, "AUTH_ENABLED"),
+            auth_frontend_base_url=(env.get("AUTH_FRONTEND_BASE_URL") or "").strip().rstrip("/"),
+            auth_public_base_url=(env.get("AUTH_PUBLIC_BASE_URL") or "").strip().rstrip("/"),
+            auth_secret=(env.get("AUTH_SECRET") or "").strip(),
+            auth_session_ttl_days=max(1, _int(env, "AUTH_SESSION_TTL_DAYS", defaults.auth_session_ttl_days)),
+            auth_cookie_secure=_bool(env, "AUTH_COOKIE_SECURE"),
+            google_client_id=(env.get("GOOGLE_CLIENT_ID") or "").strip(),
+            google_client_secret=(env.get("GOOGLE_CLIENT_SECRET") or "").strip(),
+            discord_client_id=(env.get("DISCORD_CLIENT_ID") or "").strip(),
+            discord_client_secret=(env.get("DISCORD_CLIENT_SECRET") or "").strip(),
+            x_client_id=(env.get("X_CLIENT_ID") or "").strip(),
+            x_client_secret=(env.get("X_CLIENT_SECRET") or "").strip(),
+            admin_emails=tuple(
+                e.strip().lower() for e in (env.get("ADMIN_EMAILS") or "").split(",") if e.strip()
+            ),
             max_pages_per_chapter=_int(env, "SCAN_MAX_PAGES_PER_CHAPTER", defaults.max_pages_per_chapter),
             max_bytes_per_chapter=_int(env, "SCAN_MAX_BYTES_PER_CHAPTER", defaults.max_bytes_per_chapter),
             max_bytes_per_image=_int(env, "SCAN_MAX_BYTES_PER_IMAGE", defaults.max_bytes_per_image),
             max_cover_bytes=_int(env, "SCAN_MAX_COVER_BYTES", defaults.max_cover_bytes),
             max_manifest_bytes=_int(env, "SCAN_MAX_MANIFEST_BYTES", defaults.max_manifest_bytes),
+            convert_webp=_bool(env, "SCAN_CONVERT_WEBP", defaults.convert_webp),
+            webp_quality=min(100, max(1, _int(env, "SCAN_WEBP_QUALITY", defaults.webp_quality))),
             chapter_concurrency=max(1, _int(env, "SCAN_CHAPTER_CONCURRENCY", defaults.chapter_concurrency)),
             image_concurrency=max(1, _int(env, "SCAN_IMAGE_CONCURRENCY", defaults.image_concurrency)),
             host_max_concurrency=max(1, _int(env, "SCAN_HOST_MAX_CONCURRENCY", defaults.host_max_concurrency)),
@@ -146,3 +191,18 @@ class Settings:
             )
         if self.enable_fixture and not self.dev_mode:
             raise RuntimeError("SCAN_ENABLE_FIXTURE hanya boleh aktif bersama SCAN_DEV_MODE=true.")
+        if self.auth_enabled:
+            if not self.auth_frontend_base_url or not self.auth_public_base_url:
+                raise RuntimeError(
+                    "AUTH_ENABLED=true butuh AUTH_FRONTEND_BASE_URL dan AUTH_PUBLIC_BASE_URL."
+                )
+            if not self.dev_mode and not self.auth_cookie_secure:
+                raise RuntimeError(
+                    "AUTH_COOKIE_SECURE=false tidak aman di luar SCAN_DEV_MODE=true (cookie sesi wajib Secure di produksi)."
+                )
+            if not self.dev_mode and not self.database_url:
+                raise RuntimeError("AUTH_ENABLED=true di luar dev butuh DATABASE_URL (PostgreSQL).")
+            if not self.dev_mode and not self.auth_secret and not self.worker_token:
+                raise RuntimeError(
+                    "AUTH_ENABLED=true butuh AUTH_SECRET (atau WORKER_TOKEN) untuk menandatangani cookie OAuth."
+                )

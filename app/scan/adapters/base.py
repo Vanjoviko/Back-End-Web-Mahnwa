@@ -19,6 +19,9 @@ class ChapterEntry:
     number_raw: str
     title: str = ""
     date: str | None = None
+    # Waktu rilis lengkap (ISO 8601, termasuk jam) bila sumber menyediakan.
+    # Berbeda dengan `date` yang hanya tanggal (YYYY-MM-DD); dipakai UI untuk "waktu relatif".
+    released_at: str | None = None
 
 
 @dataclass

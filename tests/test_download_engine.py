@@ -531,7 +531,7 @@ async def test_dns_pinning_connects_to_resolved_ip_and_sends_original_host(tmp_p
         data, _ = await http.fetch_bytes(f"http://pinned.example:{source.port}/img.png", max_bytes=10_000, too_large=Exception("x"), timeout=5)
         assert len(data) == 100 and resolved == ["pinned.example"]  # satu kali resolve, IP dipakai untuk koneksi
         assert source.log[-1][1]["host"] == f"pinned.example:{source.port}"
-        assert source.log[-1][1]["user-agent"].startswith("LembarScan/1.0")
+        assert source.log[-1][1]["user-agent"].startswith("AkumaScan/1.0")
     finally:
         await http.aclose()
 
@@ -548,6 +548,6 @@ async def test_fetch_headers_cannot_override_user_agent(tmp_path, source):
         await http.fetch_bytes(source.url("/img.png"), max_bytes=10_000, too_large=Exception("x"), timeout=5,
                                headers={"User-Agent": "Mozilla/5.0 Chrome", "Referer": "https://sumber.example/", "Cookie": "x=1"})
         headers = source.log[-1][1]
-        assert headers["user-agent"] == "LembarScan/1.0" and headers["referer"] == "https://sumber.example/" and "cookie" not in headers
+        assert headers["user-agent"] == "AkumaScan/1.0" and headers["referer"] == "https://sumber.example/" and "cookie" not in headers
     finally:
         await http.aclose()

@@ -3,12 +3,16 @@
 Skema = ekstensi dari fixture demo FE (`public/demo-source/manhwa.json`):
   id, title, alt, type, cover, status, genres, year, author, synopsis, permission,
   chapters[{chapter, title, date, pages[]}]
+
+`date` boleh berupa tanggal (YYYY-MM-DD) maupun waktu relatif ("3 jam lalu",
+"8 hours ago"); `released_at` menormalkannya menjadi ISO 8601 lengkap dengan jam
+bila memungkinkan (lihat `normalize_released_at`).
 """
 from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import urljoin
 
@@ -38,6 +42,114 @@ def normalize_date(value: Any) -> str | None:
     except ValueError:
         return None
     return f"{match[1]}-{match[2]}-{match[3]}"
+
+
+MONTHS: dict[str, int] = {
+    "jan": 1, "januari": 1, "january": 1,
+    "feb": 2, "februari": 2, "february": 2,
+    "mar": 3, "maret": 3, "march": 3,
+    "apr": 4, "april": 4,
+    "mei": 5, "may": 5,
+    "jun": 6, "juni": 6, "june": 6,
+    "jul": 7, "juli": 7, "july": 7,
+    "agu": 8, "ags": 8, "agustus": 8, "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9,
+    "okt": 10, "oktober": 10, "oct": 10, "october": 10,
+    "nov": 11, "november": 11,
+    "des": 12, "desember": 12, "dec": 12, "december": 12,
+}
+
+# Detik per satuan waktu relatif (Inggris & Indonesia).
+RELATIVE_UNITS: dict[str, int] = {
+    "second": 1, "seconds": 1, "sec": 1, "secs": 1, "detik": 1, "dtk": 1,
+    "minute": 60, "minutes": 60, "min": 60, "mins": 60, "menit": 60,
+    "hour": 3600, "hours": 3600, "hr": 3600, "hrs": 3600, "jam": 3600,
+    "day": 86400, "days": 86400, "hari": 86400,
+    "week": 604800, "weeks": 604800, "minggu": 604800, "pekan": 604800,
+    "month": 2592000, "months": 2592000, "bulan": 2592000,
+    "year": 31536000, "years": 31536000, "tahun": 31536000,
+}
+
+# Sumber yang didukung berbahasa Indonesia (WIB, UTC+7); dipakai saat waktu tanpa zona.
+JAKARTA = timezone(timedelta(hours=7))
+
+
+def _parse_tz(tz: str | None) -> timezone | None:
+    if not tz:
+        return None
+    if tz == "Z":
+        return timezone.utc
+    sign = 1 if tz[0] == "+" else -1
+    body = tz[1:].replace(":", "")
+    return timezone(sign * timedelta(hours=int(body[:2]), minutes=int(body[2:4])))
+
+
+def normalize_released_at(value: Any, now: datetime | None = None) -> str | None:
+    """Normalkan tanggal/waktu sumber menjadi ISO 8601 lengkap dengan jam.
+
+    Menerima: ISO ("2026-09-28T09:00:00+07:00"), "2026-09-28 09:00",
+    "28 Sep 2026 09:00", serta waktu relatif ("3 jam lalu", "8 hours ago",
+    "kemarin"). Kembalikan `None` bila tidak ada jam yang bisa dipastikan
+    (mis. hanya "2026-09-28") — pemanggil dapat memakai waktu publikasi.
+    """
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.strip().split())
+    if not text:
+        return None
+    now = now or datetime.now(timezone.utc)
+
+    # 1) ISO-ish: YYYY-MM-DD[ T]HH:MM[:SS][Z|±HH:MM]
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?\s*(Z|[+-]\d{2}:?\d{2})?$", text)
+    if m:
+        y, mo, d, hh, mm, ss, tz = m.groups()
+        try:
+            dt = datetime(int(y), int(mo), int(d), int(hh), int(mm), int(ss or 0), tzinfo=_parse_tz(tz))
+        except ValueError:
+            return None
+        if tz is None:
+            dt = dt.replace(tzinfo=JAKARTA)
+        return dt.isoformat()
+
+    # 2) DD Mon YYYY [HH:MM[:SS]]
+    m = re.match(r"^(\d{1,2})\s+([A-Za-z]+)\.?\s+(\d{4})(?:[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$", text)
+    if m:
+        d, mon, y, hh, mm, ss = m.groups()
+        month = MONTHS.get(mon.lower())
+        if not month:
+            return None
+        try:
+            dt = datetime(int(y), month, int(d), int(hh or 0), int(mm or 0), int(ss or 0), tzinfo=JAKARTA)
+        except ValueError:
+            return None
+        return dt.isoformat()
+
+    # 3) Waktu relatif
+    low = text.lower()
+    if low in {"baru saja", "just now", "saat ini", "now"}:
+        return now.astimezone(timezone.utc).isoformat()
+    if low in {"kemarin", "yesterday"}:
+        return (now - timedelta(days=1)).astimezone(timezone.utc).isoformat()
+    if low in {"hari ini", "today"}:
+        return now.astimezone(timezone.utc).isoformat()
+    m = re.match(r"^(\d+)\s*([A-Za-z]+)(?:\s+(?:ago|lalu|yang lalu))?$", text)
+    if m:
+        seconds = RELATIVE_UNITS.get(m.group(2).lower().rstrip("."))
+        if seconds is not None:
+            return (now - timedelta(seconds=int(m.group(1)) * seconds)).astimezone(timezone.utc).isoformat()
+    return None
+
+
+def extract_date_text(text: Any) -> str | None:
+    """Ambil sisa teks setelah penanda chapter; umumnya berisi tanggal/waktu rilis.
+
+    Contoh: "Chapter 14 8 hours ago" -> "8 hours ago"; "Bab 3 - 28 Sep 2026" -> "28 Sep 2026".
+    """
+    if not isinstance(text, str):
+        return None
+    cleaned = re.sub(r"(?i)\b(?:chapter|chap|bab|episode|ep)\b\s*[\d.]*", " ", text)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -–—|·:,•")
+    return cleaned or None
 
 
 def chapter_ref(index: int, label: str, title: str) -> str:
@@ -76,6 +188,7 @@ def parse_manifest(data: Any, resolve: Callable[[str], str]) -> ScanResult:
                 number_raw=label or ch_title,
                 title=ch_title,
                 date=normalize_date(item.get("date")),
+                released_at=normalize_released_at(item.get("date")),
             )
         )
 

@@ -33,6 +33,9 @@ async def test_scan_normalizes_metadata_and_sorts_chapters(make_worker, source):
     assert data["chapters"][0]["issues"] == ["duplicate_number"]
     assert data["chapters"][-1]["issues"] == ["needs_number"]
     assert data["chapters"][2]["date"] == "2026-09-30" and data["chapters"][0]["date"] in (None, "2026-09-30")
+    # waktu rilis lengkap: ISO dengan jam dipertahankan; tanggal tanpa jam -> None
+    assert data["chapters"][2]["released_at"] == "2026-09-30T10:00:00+00:00"
+    assert data["chapters"][0]["released_at"] is None
     assert data["warnings"] == []
     assert data["permission_note"] == "Izin tercatat"
     cover = data["cover"]

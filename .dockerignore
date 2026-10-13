@@ -7,4 +7,5 @@ tests
 staging
 .fixture-data
 .env
+.env.*
 *.db

@@ -7,10 +7,14 @@ WORKDIR /srv/worker
 # WITH_FIXTURE=1 menambah Pillow agar `python -m tools.fixture_source` (sumber demo orisinal) bisa dijalankan di image ini.
 ARG WITH_FIXTURE=0
 RUN pip install "fastapi>=0.110" "uvicorn[standard]>=0.28" "httpx>=0.27" "pydantic>=2" "sqlalchemy>=2" \
+    "beautifulsoup4>=4.12" \
+    "psycopg[binary]>=3.2" "alembic>=1.13" \
     && if [ "$WITH_FIXTURE" = "1" ]; then pip install "pillow"; fi
 
 COPY app ./app
 COPY tools ./tools
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
 
 RUN useradd --system --uid 10001 --create-home worker && mkdir -p /srv/worker/staging /srv/worker/.fixture-data \
     && chown -R worker /srv/worker

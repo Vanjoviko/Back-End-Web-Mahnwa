@@ -1,0 +1,56 @@
+# Docker Compose: PostgreSQL + worker API.
+#
+# Pakai: docker compose --env-file .env.dev up --build
+# Keamanan: tidak ada kredensial di file ini -- semuanya dari .env.<APP_ENV>
+# (lihat .env.example). Port host DB default 5433 agar tidak bentrok dengan
+# PostgreSQL lokal di 5432.
+name: mahnwa-backend
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    # User & database dibuat otomatis oleh image dari POSTGRES_* (tanpa CREATE ROLE manual).
+    env_file:
+      - path: .env.dev
+        required: false
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mahnwa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mahnwa}
+      POSTGRES_DB: ${POSTGRES_DB:-mahnwa}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build:
+      context: .
+    image: mahnwa-backend:local
+    restart: unless-stopped
+    env_file:
+      - path: .env.dev
+        required: false
+    environment:
+      # Di dalam jaringan Compose, database adalah service `db` pada port 5432.
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mahnwa}:${POSTGRES_PASSWORD:-mahnwa}@db:5432/${POSTGRES_DB:-mahnwa}
+      WORKER_BIND: 0.0.0.0
+      STAGING_DIR: /srv/worker/staging
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${WORKER_PORT:-8000}:8000"
+    # Migrasi dijalankan sebelum server; skema selalu dari Alembic.
+    command: sh -c "alembic upgrade head && python -m app"
+    volumes:
+      - staging:/srv/worker/staging
+
+volumes:
+  pgdata:
+  staging:

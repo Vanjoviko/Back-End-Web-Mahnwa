@@ -26,7 +26,7 @@ class ScanState:
         self.manager = JobManager(settings, self.registry, self.http, self.staging)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, auth_transport=None) -> FastAPI:
     import asyncio
 
     from app.scan import api as scan_api
@@ -66,6 +66,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             task.cancel()
             await state.manager.shutdown()
             await state.http.aclose()
+            auth_state = getattr(app.state, "auth", None)
+            if auth_state is not None:
+                close = getattr(auth_state.transport, "aclose", None)
+                if close is not None:
+                    await close()
 
     # Dokumentasi interaktif menyala secara default agar API bisa dicoba dari Swagger.
     # SCAN_ENABLE_DOCS=false menutup /docs, /redoc, dan /openapi.json (pengerasan produksi).
@@ -92,15 +97,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(scan_api.health_router)
     app.include_router(scan_api.router)
 
+    if settings.auth_enabled:
+        from app.auth import api as auth_api
+
+        auth_api.install_auth(app, auth_api.AuthState(settings, transport=auth_transport))
+        log.info("Fitur login aktif: /auth/* dan /me (sesi disimpan di database).")
+
     if settings.legacy_enabled:
         # Kode legacy (SQLite + ScraperService lama) dipertahankan di balik flag, bukan dihapus.
         from fastapi.staticfiles import StaticFiles
 
         from app import legacy_api
-        from app.database import Base, engine
+        from app.database import Base, get_engine
 
         log.warning("ENABLE_LEGACY_API aktif: endpoint /api/manga/*, /api/chapters/* dan /static tanpa autentikasi.")
-        Base.metadata.create_all(bind=engine)
+        # Kode legacy memakai create_all sendiri (di balik flag). Tabel fitur baru
+        # (auth/bookmark) memakai Alembic, bukan create_all.
+        Base.metadata.create_all(bind=get_engine())
         os.makedirs("storage/manga", exist_ok=True)
         app.mount("/static", StaticFiles(directory="storage"), name="static")
         app.include_router(legacy_api.build_router(settings))

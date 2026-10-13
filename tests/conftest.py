@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import threading
 import time
@@ -200,3 +201,72 @@ def simple_manifest(source: FakeSource, chapters: list[tuple[str, list[str]]], *
     manifest = {"title": "Seri Uji", "type": "Manhwa", "status": "ongoing", "chapters": [{"chapter": label, "title": "", "pages": pages} for label, pages in chapters]}
     manifest.update(extra)
     return manifest
+
+
+# --- Fixture fitur login (auth) ------------------------------------------------
+
+AUTH_FRONTEND_URL = "http://127.0.0.1:3000"
+AUTH_PUBLIC_URL = "http://127.0.0.1:8000"
+AUTH_SECRET = "test-auth-secret"
+
+
+def make_auth_settings(tmp_path: Path, **overrides) -> Settings:
+    base = dict(
+        worker_token=TOKEN,
+        dev_mode=True,
+        staging_dir=tmp_path / "staging",
+        fixture_dir=tmp_path / "fixtures",
+        host_min_delay_ms=0,
+        retry_backoff_base_s=0.01,
+        min_free_disk_bytes=0,
+        auth_enabled=True,
+        database_url=os.environ.get("DATABASE_URL", ""),
+        auth_frontend_base_url=AUTH_FRONTEND_URL,
+        auth_public_base_url=AUTH_PUBLIC_URL,
+        auth_secret=AUTH_SECRET,
+        google_client_id="gid",
+        google_client_secret="gsec",
+        discord_client_id="did",
+        discord_client_secret="dsec",
+        x_client_id="xid",
+        x_client_secret="xsec",
+    )
+    base.update(overrides)
+    return Settings(**base)
+
+
+@pytest.fixture
+def auth_db(tmp_path, monkeypatch):
+    """Database SQLite sementara (portabel lewat SQLAlchemy) untuk uji auth."""
+    from app import database
+    import app.auth.models  # noqa: F401 - daftarkan tabel ke metadata
+
+    db_path = tmp_path / "auth-test.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+pysqlite:///{db_path}")
+    database.reset_engine()
+    engine = database.get_engine()
+    database.Base.metadata.create_all(bind=engine)
+    try:
+        yield engine
+    finally:
+        database.reset_engine()
+
+
+@pytest_asyncio.fixture
+async def make_auth_app(tmp_path, auth_db):
+    """Factory aplikasi login: kembalikan (app, client, settings)."""
+    created = []
+
+    async def factory(transport=None, **overrides):
+        settings = make_auth_settings(tmp_path, **overrides)
+        app = create_app(settings, auth_transport=transport)
+        ctx = app.router.lifespan_context(app)
+        await ctx.__aenter__()
+        client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://worker")
+        created.append((ctx, client))
+        return app, client, settings
+
+    yield factory
+    for ctx, client in created:
+        await client.aclose()
+        await ctx.__aexit__(None, None, None)

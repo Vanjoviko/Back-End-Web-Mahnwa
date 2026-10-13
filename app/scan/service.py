@@ -96,6 +96,7 @@ async def run_scan(url: str, *, settings: Settings, registry: AdapterRegistry, h
                 "number": p.number,
                 "title": entry.title,
                 "date": entry.date,
+                "released_at": entry.released_at,
                 "issues": p.issues,
             }
             for entry, p in zip(result.chapters, parsed)

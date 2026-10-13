@@ -6,6 +6,7 @@ from typing import Mapping
 from DrissionPage import ChromiumPage, ChromiumOptions
 
 from app.scan.adapters.base import SourceAdapter, AdapterContext, ScanResult, ChapterEntry, PageRef
+from app.scan.adapters.manifest_schema import extract_date_text, normalize_date, normalize_released_at
 
 def parse_chapter_number_raw(text: str) -> str:
     match = re.search(r'chapter\s*(\d+(?:\.\d+)?)', text, re.IGNORECASE)
@@ -76,11 +77,14 @@ class DrissionMangaAdapter(SourceAdapter):
                     text = el.text.strip()
                     if href and href not in seen_urls:
                         seen_urls.add(href)
+                        date_text = extract_date_text(text)
                         raw_chapters.append(
                             ChapterEntry(
                                 ref=href,  # ref diisi dengan URL chapter
                                 number_raw=parse_chapter_number_raw(text or href),
-                                title=text.split("\n")[0].strip()
+                                title=text.split("\n")[0].strip(),
+                                date=normalize_date(date_text),
+                                released_at=normalize_released_at(date_text),
                             )
                         )
 
